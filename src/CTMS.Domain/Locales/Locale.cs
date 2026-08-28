@@ -35,5 +35,11 @@ public sealed class Locale : Entity
 
     public bool IsRtl { get; private set; }
 
+    public void SetDisplayName(string displayName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        DisplayName = displayName.Trim();
+    }
+
     public void SetRightToLeft(bool isRtl) => IsRtl = isRtl;
 }

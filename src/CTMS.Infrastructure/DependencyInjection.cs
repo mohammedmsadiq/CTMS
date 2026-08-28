@@ -1,5 +1,7 @@
 using CTMS.Application.Common;
+using CTMS.Application.Locales;
 using CTMS.Application.Projects;
+using CTMS.Application.Translations;
 using CTMS.Infrastructure.Persistence;
 using CTMS.Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -25,6 +27,9 @@ public static class DependencyInjection
 
         services.AddScoped<IUnitOfWork>(provider => provider.GetRequiredService<CtmsDbContext>());
         services.AddScoped<IProjectRepository, ProjectRepository>();
+        services.AddScoped<ILocaleRepository, LocaleRepository>();
+        services.AddScoped<ITranslationKeyRepository, TranslationKeyRepository>();
+        services.AddScoped<ITranslationStringRepository, TranslationStringRepository>();
 
         return services;
     }

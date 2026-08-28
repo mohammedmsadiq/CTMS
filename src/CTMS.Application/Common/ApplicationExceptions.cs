@@ -18,3 +18,34 @@ public sealed class SlugAlreadyInUseException : Exception
 
     public string Slug { get; }
 }
+
+/// <summary>Raised when a referenced resource does not exist.</summary>
+public sealed class NotFoundException : Exception
+{
+    public NotFoundException(string message)
+        : base(message)
+    {
+    }
+}
+
+/// <summary>Raised when a create or update would break a uniqueness constraint.</summary>
+public sealed class ConflictException : Exception
+{
+    public ConflictException(string message)
+        : base(message)
+    {
+    }
+}
+
+/// <summary>
+/// Raised when an update is rejected because the caller's expected version no longer
+/// matches the stored one.
+/// </summary>
+public sealed class ConcurrencyException : Exception
+{
+    public ConcurrencyException(uint currentVersion)
+        : base("The translation string was changed by someone else; reload and retry.")
+        => CurrentVersion = currentVersion;
+
+    public uint CurrentVersion { get; }
+}

@@ -16,6 +16,9 @@ public sealed class ProjectRepository : IProjectRepository
     public Task<Project?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _db.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
 
+    public Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default)
+        => _db.Projects.AnyAsync(p => p.Id == id, cancellationToken);
+
     public Task<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken = default)
         => _db.Projects.AnyAsync(p => p.Slug == slug, cancellationToken);
 

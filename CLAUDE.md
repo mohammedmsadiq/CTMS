@@ -74,17 +74,88 @@ string is configuration key `ConnectionStrings:CtmsDatabase`; override it in any
 with `ConnectionStrings__CtmsDatabase`. No credentials are committed — `appsettings.json`
 ships a passwordless localhost placeholder.
 
-### API surface (first vertical slice)
+### API surface
+
+Each `/api/*` group carries a `// TODO: auth` marker where `RequireAuthorization()` will go.
+Known application/domain exceptions become RFC 7807 ProblemDetails in
+`ApplicationExceptionHandler`: `ValidationException`→400, `NotFoundException`→404,
+`SlugAlreadyInUseException`/`ConflictException`/`ConcurrencyException`/
+`InvalidReviewTransitionException`→409 (plus EF `DbUpdateConcurrencyException`→409).
+
+**Health**
 
 - `GET /health` — liveness (no checks).
 - `GET /health/ready` — readiness; runs an EF Core `CanConnect` check (tag `ready`).
+
+**Projects**
+
 - `GET /api/projects` — list `ProjectDto`.
 - `POST /api/projects` — body `CreateProjectRequest` (`name`, `baseLocaleCode`, optional
   `slug`, optional `description`); `201` with `ProjectDto`; `409` if the slug is taken;
   `400` on validation failure.
 - `GET /api/projects/{id:guid}` — `ProjectDto` or `404`.
 
+**Locales** (nested under a project)
+
+- `GET /api/projects/{projectId:guid}/locales` — list `LocaleDto`.
+- `POST /api/projects/{projectId:guid}/locales` — body `CreateLocaleRequest` (`code` BCP-47,
+  `displayName`, optional `isRtl`); `201` + `Location`; `404` unknown project; `409` if
+  `(projectId, code)` exists; `400` on validation. `code` is trimmed and internal whitespace
+  collapsed; casing is preserved.
+- `GET /api/projects/{projectId:guid}/locales/{localeId:guid}` — `LocaleDto` or `404`.
+- `PATCH /api/projects/{projectId:guid}/locales/{localeId:guid}` — body `UpdateLocaleRequest`
+  (`displayName?`, `isRtl?`; omitted members unchanged); `200` or `404`.
+- `DELETE /api/projects/{projectId:guid}/locales/{localeId:guid}` — `204` or `404`. Cascades
+  to the locale's `TranslationString` rows.
+
+**Translation keys** (nested under a project)
+
+- `GET /api/projects/{projectId:guid}/keys?skip=0&take=50` — `PagedResult<TranslationKeyDto>`
+  (`{ items, total }`); `skip` floored at 0, `take` defaulted to 50 and capped at 200.
+- `POST /api/projects/{projectId:guid}/keys` — body `CreateTranslationKeyRequest` (`keyName`
+  matching `[A-Za-z0-9_.-]+`, optional `description`); `201`; `404` unknown project; `409` if
+  `(projectId, keyName)` exists; `400` on validation.
+- `GET /api/projects/{projectId:guid}/keys/{keyId:guid}` — `TranslationKeyDto` or `404`.
+- `PATCH /api/projects/{projectId:guid}/keys/{keyId:guid}` — body `UpdateTranslationKeyRequest`
+  (`description`); `200` or `404`.
+- `DELETE /api/projects/{projectId:guid}/keys/{keyId:guid}` — `204` or `404`. Cascades to the
+  key's `TranslationString` rows.
+
+**Translation strings** (per key, per locale)
+
+- `GET /api/projects/{projectId:guid}/keys/{keyId:guid}/strings` — `TranslationStringDto[]`
+  for every locale, or `404` if the key is not in the project.
+- `GET /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}` —
+  `TranslationStringDto` or `404`.
+- `PUT /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}` — upsert;
+  body `UpsertTranslationStringRequest` (`value`, optional `updatedBy`, optional
+  `expectedVersion`). `201` + `Location` when the row is created, `200` when it is updated;
+  `404` if the key or locale is not in the project; `400` on validation. Editing an existing
+  string resets `ReviewState` to `NeedsReview` unless it is currently `Draft` (a draft stays a
+  draft). If `expectedVersion` is supplied and does not match the stored `Version`, the
+  response is `409` with `extensions.currentVersion`; an EF `DbUpdateConcurrencyException`
+  maps to the same `409`.
+
+**Review workflow**
+
+- `POST /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}/review` —
+  body `{ "action": "submit" | "approve" | "reject" | "reopen", "reviewedBy": "..." }`;
+  `200` with `TranslationStringDto`, `404` if the string does not exist, `409`
+  (`InvalidReviewTransitionException`) for an illegal transition. The transition rules live on
+  the `TranslationString.ChangeReviewState` domain method:
+
+  | action  | from        | to          |
+  |---------|-------------|-------------|
+  | submit  | Draft       | NeedsReview |
+  | approve | NeedsReview | Approved    |
+  | reject  | NeedsReview | Draft       |
+  | reopen  | Approved    | NeedsReview |
+
+  Any other `(from, to)` pair throws `InvalidReviewTransitionException`. A successful
+  transition sets `UpdatedBy` to `reviewedBy`; PostgreSQL's `xmin` advances the `Version`.
+
 ### Tests
 
-`tests/CTMS.Application.Tests` (xUnit) exercises `ProjectService` against a real
-`CtmsDbContext` on SQLite in-memory (a kept-open `:memory:` connection per test class).
+`tests/CTMS.Application.Tests` (xUnit) exercises the application services against a real
+`CtmsDbContext` on SQLite in-memory (a kept-open `:memory:` connection per test class), plus
+`ReviewWorkflowTests` which drives the `TranslationString` review transitions directly.

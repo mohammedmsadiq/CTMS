@@ -55,14 +55,39 @@ public sealed class TranslationString : Entity
 
         Value = value;
         UpdatedBy = editedBy.Trim();
-        ReviewState = ReviewState.NeedsReview;
+
+        // Editing published content sends it back for review; a draft stays a draft.
+        if (ReviewState != ReviewState.Draft)
+        {
+            ReviewState = ReviewState.NeedsReview;
+        }
     }
 
-    public void Approve(string reviewedBy)
+    /// <summary>
+    /// Applies a review-workflow transition. Legal moves are
+    /// Draft→NeedsReview (submit), NeedsReview→Approved (approve),
+    /// NeedsReview→Draft (reject) and Approved→NeedsReview (reopen); anything else throws
+    /// <see cref="InvalidReviewTransitionException"/>.
+    /// </summary>
+    public void ChangeReviewState(ReviewState target, string reviewedBy)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reviewedBy);
 
+        var legal = (ReviewState, target) switch
+        {
+            (ReviewState.Draft, ReviewState.NeedsReview) => true,
+            (ReviewState.NeedsReview, ReviewState.Approved) => true,
+            (ReviewState.NeedsReview, ReviewState.Draft) => true,
+            (ReviewState.Approved, ReviewState.NeedsReview) => true,
+            _ => false,
+        };
+
+        if (!legal)
+        {
+            throw new InvalidReviewTransitionException(ReviewState, target);
+        }
+
+        ReviewState = target;
         UpdatedBy = reviewedBy.Trim();
-        ReviewState = ReviewState.Approved;
     }
 }

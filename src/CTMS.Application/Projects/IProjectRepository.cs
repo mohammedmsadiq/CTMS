@@ -9,6 +9,8 @@ public interface IProjectRepository
 
     Task<Project?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
+    Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default);
+
     Task<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken = default);
 
     Task AddAsync(Project project, CancellationToken cancellationToken = default);

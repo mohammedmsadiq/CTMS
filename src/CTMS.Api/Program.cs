@@ -44,5 +44,9 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 });
 
 app.MapProjectEndpoints();
+app.MapLocaleEndpoints();
+app.MapTranslationKeyEndpoints();
+app.MapTranslationStringEndpoints();
+app.MapReviewEndpoints();
 
 app.Run();
