@@ -1,0 +1,33 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4">
+            <span class="app-title">CTMS Admin</span>
+            <div class="flex-grow-1"></div>
+            @* TODO: WS7 auth — replace this static stub with the real signed-in user / sign-out menu. *@
+            <span class="user-stub" title="Authentication is not wired yet (WS7)">
+                <span class="bi bi-person-circle" aria-hidden="true"></span>
+                @CurrentUser.DisplayName
+            </span>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    [Inject] private CurrentUser CurrentUser { get; set; } = default!;
+}

@@ -1,0 +1,14 @@
+<span class="badge @CssClass" title="Review state">@State</span>
+
+@code {
+    [Parameter, EditorRequired] public string State { get; set; } = "";
+
+    private string CssClass => State switch
+    {
+        ReviewStates.Draft => "text-bg-secondary",
+        ReviewStates.NeedsReview => "text-bg-warning",
+        ReviewStates.Approved => "text-bg-success",
+        ReviewStates.Published => "text-bg-primary",
+        _ => "text-bg-light",
+    };
+}

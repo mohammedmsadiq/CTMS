@@ -1,0 +1,257 @@
+@page "/projects/{ProjectId:guid}/locales"
+@using System.ComponentModel.DataAnnotations
+@inject CtmsApiClient Api
+
+<PageTitle>Locales — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Locales</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Locales</h1>
+    <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
+        @(_showCreate ? "Close" : "Add locale")
+    </button>
+</div>
+
+@if (_showCreate)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <EditForm Model="_form" OnValidSubmit="CreateAsync">
+                <DataAnnotationsValidator />
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" for="l-code">Code (BCP-47)</label>
+                        <InputText id="l-code" class="form-control" placeholder="fr-FR" @bind-Value="_form.Code" />
+                        <ValidationMessage For="() => _form.Code" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="l-name">Display name</label>
+                        <InputText id="l-name" class="form-control" placeholder="French (France)" @bind-Value="_form.DisplayName" />
+                        <ValidationMessage For="() => _form.DisplayName" />
+                    </div>
+                    <div class="col-md-3 form-check ms-2">
+                        <InputCheckbox id="l-rtl" class="form-check-input" @bind-Value="_form.IsRtl" />
+                        <label class="form-check-label" for="l-rtl">Right-to-left</label>
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary w-100" disabled="@_saving">Add</button>
+                    </div>
+                </div>
+                <ErrorAlert Error="_createError" />
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading locales…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_locales is { Count: 0 })
+{
+    <EmptyState Title="No locales enabled" Hint="Add a locale to start translating this project." />
+}
+else if (_locales is not null)
+{
+    <ErrorAlert Error="_rowError" />
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Code</th>
+                    <th scope="col">Display name</th>
+                    <th scope="col">RTL</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var locale in _locales)
+                {
+                    var editing = _editingId == locale.Id;
+                    <tr>
+                        <td><code>@locale.Code</code></td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input class="form-control form-control-sm" @bind="_editName" aria-label="Display name" />
+                            }
+                            else
+                            {
+                                @locale.DisplayName
+                            }
+                        </td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input type="checkbox" class="form-check-input" @bind="_editRtl" aria-label="Right-to-left" />
+                            }
+                            else
+                            {
+                                @(locale.IsRtl ? "Yes" : "No")
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            @if (editing)
+                            {
+                                <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(locale)" disabled="@_saving">Save</button>
+                                <button class="btn btn-sm btn-link" @onclick="CancelEdit" disabled="@_saving">Cancel</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(locale)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = locale">Delete</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+<ConfirmDialog Visible="_pendingDelete is not null"
+               Title="Delete locale"
+               Message="@($"Delete locale \"{_pendingDelete?.Code}\"? Its translation strings are removed too.")"
+               ConfirmLabel="Delete"
+               Busy="_saving"
+               OnConfirm="DeleteConfirmedAsync"
+               OnCancel="() => _pendingDelete = null" />
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showCreate;
+    private ApiError? _loadError;
+    private ApiError? _createError;
+    private ApiError? _rowError;
+    private IReadOnlyList<LocaleDto>? _locales;
+    private readonly CreateLocaleForm _form = new();
+
+    private Guid? _editingId;
+    private string _editName = "";
+    private bool _editRtl;
+    private LocaleDto? _pendingDelete;
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _editingId = null;
+        var result = await Api.GetLocalesAsync(ProjectId);
+        if (result.IsSuccess)
+        {
+            _locales = result.Value;
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        _createError = null;
+        var result = await Api.CreateLocaleAsync(ProjectId,
+            new CreateLocaleRequest(_form.Code.Trim(), _form.DisplayName.Trim(), _form.IsRtl));
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _form.Reset();
+            _showCreate = false;
+            await LoadAsync();
+        }
+        else
+        {
+            _createError = result.Error;
+        }
+    }
+
+    private void BeginEdit(LocaleDto locale)
+    {
+        _rowError = null;
+        _editingId = locale.Id;
+        _editName = locale.DisplayName;
+        _editRtl = locale.IsRtl;
+    }
+
+    private void CancelEdit() => _editingId = null;
+
+    private async Task SaveEditAsync(LocaleDto locale)
+    {
+        _saving = true;
+        _rowError = null;
+        var result = await Api.UpdateLocaleAsync(ProjectId, locale.Id,
+            new UpdateLocaleRequest(_editName.Trim(), _editRtl));
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _editingId = null;
+            await LoadAsync();
+        }
+        else
+        {
+            _rowError = result.Error;
+        }
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_pendingDelete is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        _rowError = null;
+        var result = await Api.DeleteLocaleAsync(ProjectId, _pendingDelete.Id);
+        _saving = false;
+        _pendingDelete = null;
+
+        if (result.IsSuccess)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            _rowError = result.Error;
+        }
+    }
+
+    private sealed class CreateLocaleForm
+    {
+        [Required, RegularExpression("^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$", ErrorMessage = "Looks like a BCP-47 code, e.g. pt-BR.")]
+        public string Code { get; set; } = "";
+
+        [Required, StringLength(100, MinimumLength = 1)]
+        [Display(Name = "Display name")]
+        public string DisplayName { get; set; } = "";
+
+        public bool IsRtl { get; set; }
+
+        public void Reset()
+        {
+            Code = "";
+            DisplayName = "";
+            IsRtl = false;
+        }
+    }
+}

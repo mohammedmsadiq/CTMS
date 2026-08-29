@@ -1,0 +1,272 @@
+@page "/projects/{ProjectId:guid}/keys"
+@using System.ComponentModel.DataAnnotations
+@inject CtmsApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Keys — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Keys</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Translation keys</h1>
+    <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
+        @(_showCreate ? "Close" : "New key")
+    </button>
+</div>
+
+@if (_showCreate)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <EditForm Model="_form" OnValidSubmit="CreateAsync">
+                <DataAnnotationsValidator />
+                <div class="row g-3">
+                    <div class="col-md-5">
+                        <label class="form-label" for="k-name">Key name</label>
+                        <InputText id="k-name" class="form-control" placeholder="checkout.button.submit" @bind-Value="_form.KeyName" />
+                        <ValidationMessage For="() => _form.KeyName" />
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label" for="k-desc">Description <span class="text-muted">(optional)</span></label>
+                        <InputText id="k-desc" class="form-control" @bind-Value="_form.Description" />
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary w-100" disabled="@_saving">Create</button>
+                    </div>
+                </div>
+                <ErrorAlert Error="_createError" />
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading keys…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_page is { Total: 0 })
+{
+    <EmptyState Title="No keys yet" Hint="Create a translation key, then edit its values per locale." />
+}
+else if (_page is not null)
+{
+    <ErrorAlert Error="_rowError" />
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Key</th>
+                    <th scope="col">Description</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var key in _page.Items)
+                {
+                    var editing = _editingId == key.Id;
+                    <tr>
+                        <td>
+                            <a href="@($"projects/{ProjectId}/keys/{key.Id}/strings")"><code>@key.KeyName</code></a>
+                        </td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input class="form-control form-control-sm" @bind="_editDescription" aria-label="Description" />
+                            }
+                            else
+                            {
+                                @(string.IsNullOrWhiteSpace(key.Description) ? "—" : key.Description)
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            @if (editing)
+                            {
+                                <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(key)" disabled="@_saving">Save</button>
+                                <button class="btn btn-sm btn-link" @onclick="() => _editingId = null" disabled="@_saving">Cancel</button>
+                            }
+                            else
+                            {
+                                <a class="btn btn-sm btn-outline-primary" href="@($"projects/{ProjectId}/keys/{key.Id}/strings")">Edit values</a>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(key)">Description</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = key">Delete</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center">
+        <span class="text-muted small">
+            Showing @(_skip + 1)–@Math.Min(_skip + _take, _page.Total) of @_page.Total
+        </span>
+        <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" @onclick="PrevPage" disabled="@(_skip == 0 || _loading)">Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPage" disabled="@(_skip + _take >= _page.Total || _loading)">Next</button>
+        </div>
+    </div>
+}
+
+<ConfirmDialog Visible="_pendingDelete is not null"
+               Title="Delete key"
+               Message="@($"Delete key \"{_pendingDelete?.KeyName}\"? All its translation strings are removed too.")"
+               ConfirmLabel="Delete"
+               Busy="_saving"
+               OnConfirm="DeleteConfirmedAsync"
+               OnCancel="() => _pendingDelete = null" />
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+
+    private const int _take = 25;
+    private int _skip;
+
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showCreate;
+    private ApiError? _loadError;
+    private ApiError? _createError;
+    private ApiError? _rowError;
+    private PagedResult<TranslationKeyDto>? _page;
+    private readonly CreateKeyForm _form = new();
+
+    private Guid? _editingId;
+    private string _editDescription = "";
+    private TranslationKeyDto? _pendingDelete;
+
+    protected override Task OnParametersSetAsync()
+    {
+        _skip = 0;
+        return LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _editingId = null;
+        var result = await Api.GetKeysAsync(ProjectId, _skip, _take);
+        if (result.IsSuccess)
+        {
+            _page = result.Value;
+            if (_skip > 0 && _page!.Items.Count == 0)
+            {
+                _skip = Math.Max(0, _skip - _take);
+                _loading = false;
+                await LoadAsync();
+                return;
+            }
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private Task NextPage()
+    {
+        _skip += _take;
+        return LoadAsync();
+    }
+
+    private Task PrevPage()
+    {
+        _skip = Math.Max(0, _skip - _take);
+        return LoadAsync();
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        _createError = null;
+        var result = await Api.CreateKeyAsync(ProjectId,
+            new CreateTranslationKeyRequest(_form.KeyName.Trim(),
+                string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim()));
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _form.KeyName = "";
+            _form.Description = "";
+            _showCreate = false;
+            _skip = 0;
+            await LoadAsync();
+        }
+        else
+        {
+            _createError = result.Error;
+        }
+    }
+
+    private void BeginEdit(TranslationKeyDto key)
+    {
+        _rowError = null;
+        _editingId = key.Id;
+        _editDescription = key.Description ?? "";
+    }
+
+    private async Task SaveEditAsync(TranslationKeyDto key)
+    {
+        _saving = true;
+        _rowError = null;
+        var result = await Api.UpdateKeyAsync(ProjectId, key.Id,
+            new UpdateTranslationKeyRequest(string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription.Trim()));
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _editingId = null;
+            await LoadAsync();
+        }
+        else
+        {
+            _rowError = result.Error;
+        }
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_pendingDelete is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        _rowError = null;
+        var result = await Api.DeleteKeyAsync(ProjectId, _pendingDelete.Id);
+        _saving = false;
+        _pendingDelete = null;
+
+        if (result.IsSuccess)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            _rowError = result.Error;
+        }
+    }
+
+    private sealed class CreateKeyForm
+    {
+        [Required]
+        [RegularExpression("^[A-Za-z0-9_.-]+$", ErrorMessage = "Only letters, digits, dot, underscore and hyphen.")]
+        [Display(Name = "Key name")]
+        public string KeyName { get; set; } = "";
+
+        [StringLength(500)]
+        public string? Description { get; set; }
+    }
+}

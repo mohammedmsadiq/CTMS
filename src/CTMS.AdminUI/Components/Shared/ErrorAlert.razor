@@ -1,0 +1,29 @@
+@if (Error is not null)
+{
+    <div class="alert alert-danger" role="alert">
+        <div class="d-flex justify-content-between align-items-start gap-3">
+            <div>
+                <strong>@Error.Title</strong>
+                @if (!string.IsNullOrWhiteSpace(Error.Detail) && Error.Detail != Error.Title)
+                {
+                    <div class="small mt-1">@Error.Detail</div>
+                }
+                @if (Error.Status > 0)
+                {
+                    <div class="small text-muted mt-1">HTTP @Error.Status</div>
+                }
+            </div>
+            @if (OnRetry.HasDelegate)
+            {
+                <button type="button" class="btn btn-sm btn-outline-danger flex-shrink-0" @onclick="OnRetry">
+                    Retry
+                </button>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public ApiError? Error { get; set; }
+    [Parameter] public EventCallback OnRetry { get; set; }
+}

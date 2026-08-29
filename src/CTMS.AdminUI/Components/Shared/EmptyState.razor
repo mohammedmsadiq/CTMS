@@ -1,0 +1,17 @@
+<div class="text-center text-secondary border rounded py-5 px-3 my-3">
+    <p class="mb-1 fw-semibold">@Title</p>
+    @if (!string.IsNullOrWhiteSpace(Hint))
+    {
+        <p class="small mb-0">@Hint</p>
+    }
+    @if (ChildContent is not null)
+    {
+        <div class="mt-3">@ChildContent</div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Nothing here yet";
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

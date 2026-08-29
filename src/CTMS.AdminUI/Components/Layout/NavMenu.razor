@@ -1,0 +1,110 @@
+@implements IDisposable
+@inject NavigationManager Nav
+@inject CtmsApiClient Api
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">CTMS Admin</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="projects" Match="NavLinkMatch.Prefix">
+                <span class="bi bi-folder2-open-nav-menu" aria-hidden="true"></span> Projects
+            </NavLink>
+        </div>
+
+        @if (_projectId is { } projectId)
+        {
+            <div class="nav-context px-3 pt-3 pb-1 text-uppercase small">
+                @(_projectName ?? "Project")
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="@($"projects/{projectId}")" Match="NavLinkMatch.All">
+                    <span class="bi bi-info-circle-nav-menu" aria-hidden="true"></span> Overview
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="@($"projects/{projectId}/locales")">
+                    <span class="bi bi-globe2-nav-menu" aria-hidden="true"></span> Locales
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="@($"projects/{projectId}/keys")">
+                    <span class="bi bi-key-nav-menu" aria-hidden="true"></span> Keys
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="@($"projects/{projectId}/review")">
+                    <span class="bi bi-check2-square-nav-menu" aria-hidden="true"></span> Review queue
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link disabled-nav" href="@($"projects/{projectId}/bundles")">
+                    <span class="bi bi-box-nav-menu" aria-hidden="true"></span> Bundles <span class="soon">WS4</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link disabled-nav" href="@($"projects/{projectId}/history")">
+                    <span class="bi bi-clock-history-nav-menu" aria-hidden="true"></span> History <span class="soon">WS4</span>
+                </NavLink>
+            </div>
+        }
+    </nav>
+</div>
+
+@code {
+    private Guid? _projectId;
+    private string? _projectName;
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        _ = SyncToLocationAsync();
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+        => _ = SyncToLocationAsync();
+
+    private async Task SyncToLocationAsync()
+    {
+        var previous = _projectId;
+        _projectId = ExtractProjectId(Nav.ToBaseRelativePath(Nav.Uri));
+
+        if (_projectId != previous)
+        {
+            _projectName = null;
+            await InvokeAsync(StateHasChanged);
+
+            if (_projectId is { } id)
+            {
+                var result = await Api.GetProjectAsync(id);
+                if (result.IsSuccess && _projectId == id)
+                {
+                    _projectName = result.Value!.Name;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+    }
+
+    private static Guid? ExtractProjectId(string relativePath)
+    {
+        var path = relativePath.Split('?', '#')[0];
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length >= 2 &&
+            segments[0].Equals("projects", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(segments[1], out var id))
+        {
+            return id;
+        }
+
+        return null;
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

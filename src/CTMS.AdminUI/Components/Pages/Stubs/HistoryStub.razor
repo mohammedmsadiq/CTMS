@@ -1,0 +1,24 @@
+@page "/projects/{ProjectId:guid}/history"
+
+<PageTitle>History — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item active" aria-current="page">History</li>
+    </ol>
+</nav>
+
+<h1 class="h3">Audit / history</h1>
+
+@* TODO: WS4 — wire this up once backend-core ships GET /api/projects/{projectId}/history
+   (AuditService is implemented; the HTTP surface is not). See docs/api.md "Planned endpoints". *@
+<div class="alert alert-info">
+    Not available yet. The audit-trail endpoints are planned for WS4 and do not exist on the
+    current API.
+</div>
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+}
