@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Multi-targeted so the SDK is usable from MAUI / mobile / older runtimes
+    (netstandard2.0) as well as the latest host (net10.0). The repo-root
+    Directory.Build.props pins a single <TargetFramework>net10.0</TargetFramework>;
+    it is cleared here before <TargetFrameworks> is set so both TFMs build.
+  -->
+  <PropertyGroup>
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
+    <RootNamespace>CTMS.Client</RootNamespace>
+    <AssemblyName>CTMS.Client</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Packaging (published by the release pipeline; see docs/client-sdk.md). -->
+    <IsPackable>true</IsPackable>
+    <PackageId>CTMS.Client</PackageId>
+    <Description>Client SDK for the Centralised Translation Management System: revalidating bundle fetch, offline cache, and locale fallback-chain resolution.</Description>
+    <PackageTags>ctms;i18n;localization;translation;sdk</PackageTags>
+    <!--
+      XML-doc generation is intentionally off: the repo builds with
+      TreatWarningsAsErrors and enabling it turns every missing-doc CS1591 into a
+      build break. Public members are still documented in source for IDE hover.
+    -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!--
+    netstandard2.0 has no in-box System.Text.Json and lacks a handful of compiler
+    support types used by `record` / `init` / nullable analysis. LangVersion stays
+    at the repo default; the polyfills under Compatibility/ cover the gap.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Text.Json" Version="10.0.11" />
+  </ItemGroup>
+
+  <!-- The IServiceCollection.AddCtmsClient extension only compiles for net10.0. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Compatibility/**/*.cs" Condition="'$(TargetFramework)' != 'netstandard2.0'" />
+    <Compile Remove="Extensions/**/*.cs" Condition="'$(TargetFramework)' != 'net10.0'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CTMS.Client.Tests" />
+  </ItemGroup>
+
+</Project>
