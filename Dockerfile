@@ -11,16 +11,17 @@ ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 
 # 1. Restore layer: copy only the files that affect `dotnet restore` so this
-#    layer stays cached until a project's dependencies actually change.
+#    layer stays cached until a project's dependencies actually change. The image
+#    only builds the API, so restore that project graph (Api -> Application ->
+#    Domain, Infrastructure) rather than the whole solution — the AdminUI, client
+#    SDK, samples and test projects are not part of the runtime image.
 COPY global.json ./
 COPY Directory.Build.props ./
-COPY CTMS.sln ./
 COPY src/CTMS.Domain/CTMS.Domain.csproj            src/CTMS.Domain/
 COPY src/CTMS.Application/CTMS.Application.csproj   src/CTMS.Application/
 COPY src/CTMS.Infrastructure/CTMS.Infrastructure.csproj src/CTMS.Infrastructure/
 COPY src/CTMS.Api/CTMS.Api.csproj                  src/CTMS.Api/
-COPY tests/CTMS.Application.Tests/CTMS.Application.Tests.csproj tests/CTMS.Application.Tests/
-RUN dotnet restore CTMS.sln
+RUN dotnet restore src/CTMS.Api/CTMS.Api.csproj
 
 # 2. Copy the rest of the source and publish the API.
 COPY . .

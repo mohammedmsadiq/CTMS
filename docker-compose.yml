@@ -58,6 +58,13 @@ services:
       ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
       ASPNETCORE_URLS: "http://+:8080"
       Seed__Enabled: "${SEED_ENABLED:-true}"
+      # --- auth ------------------------------------------------------------
+      # Local stack runs with auth off: every request is a synthetic all-roles
+      # principal, so no Entra ID registration is needed. Set Auth__Enabled=true
+      # (and the AzureAd__* vars) to exercise real JWT bearer auth. Refused when
+      # ASPNETCORE_ENVIRONMENT=Production.
+      Auth__Enabled: "${AUTH_ENABLED:-false}"
+      Auth__PublicBundleReads: "${AUTH_PUBLIC_BUNDLE_READS:-true}"
 
 volumes:
   mongo-data:
