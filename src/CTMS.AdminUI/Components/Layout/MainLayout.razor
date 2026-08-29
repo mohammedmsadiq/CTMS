@@ -1,0 +1,40 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4">
+            <span class="app-title">CTMS Admin</span>
+            <div class="flex-grow-1"></div>
+            <AuthorizeView>
+                <Authorized>
+                    <span class="user-stub">
+                        <span class="bi bi-person-circle" aria-hidden="true"></span>
+                        @(context.User.Identity?.Name ?? CurrentUser.DisplayName)
+                    </span>
+                    <a class="ms-3 small" href="MicrosoftIdentity/Account/SignOut">Sign out</a>
+                </Authorized>
+                <NotAuthorized>
+                    <a class="small" href="MicrosoftIdentity/Account/SignIn">Sign in</a>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    [Inject] private CurrentUser CurrentUser { get; set; } = default!;
+}

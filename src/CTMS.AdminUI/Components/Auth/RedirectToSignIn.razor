@@ -1,0 +1,12 @@
+@inject NavigationManager Nav
+
+@* Sends an unauthenticated visitor through the OpenID Connect challenge. A full-page
+   navigation is required so the auth handler can issue the redirect to Entra ID. *@
+
+@code {
+    protected override void OnInitialized()
+    {
+        var returnUrl = Uri.EscapeDataString(Nav.ToBaseRelativePath(Nav.Uri));
+        Nav.NavigateTo($"MicrosoftIdentity/Account/SignIn?redirectUri=/{returnUrl}", forceLoad: true);
+    }
+}

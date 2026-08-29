@@ -1,0 +1,63 @@
+# -----------------------------------------------------------------------------
+# Reusable test steps for CTMS.
+#
+# Runs `dotnet test` at solution scope with Coverlet's "XPlat Code Coverage"
+# collector, then publishes the VSTest .trx results and the Cobertura coverage
+# report so they show up on the pipeline run summary. A single run is enough:
+# the Azure DevOps Tests tab already groups results by test assembly, so
+# `CTMS.Api.IntegrationTests` shows as its own group without splitting the
+# invocation.
+#
+# MongoDB: neither suite reads ConnectionStrings:CtmsDatabase, so no service
+# container or connection-string env var is wired here (azure-pipelines.yml
+# dropped its `mongo:7` service for the same reason; GitHub Actions matches):
+#   * CTMS.Application.Tests    - EphemeralMongo starts an in-process mongod.
+#   * CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent has a
+#     Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo. The
+#     WebApplicationFactory overrides the API's Mongo config with the fixture's
+#     connection string.
+#
+# NOTE: the test projects set <NuGetAudit>false</NuGetAudit> (EphemeralMongo
+# pulls older SharpCompress/Snappier, Testcontainers pulls SSH.NET). The solution
+# build keeps auditing on, so `dotnet build` still fails on advisories in
+# shipping code.
+# -----------------------------------------------------------------------------
+parameters:
+  - name: buildConfiguration
+    type: string
+    default: Release
+  - name: solution
+    type: string
+    default: CTMS.sln
+  - name: resultsDirectory
+    type: string
+    default: $(Agent.TempDirectory)/TestResults
+
+steps:
+  - task: DotNetCoreCLI@2
+    displayName: dotnet test (+ XPlat Code Coverage)
+    inputs:
+      command: test
+      projects: ${{ parameters.solution }}
+      arguments: >-
+        -c ${{ parameters.buildConfiguration }}
+        --no-build
+        --logger trx
+        --collect:"XPlat Code Coverage"
+        --results-directory "${{ parameters.resultsDirectory }}"
+
+  - task: PublishTestResults@2
+    displayName: Publish test results (.trx)
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: VSTest
+      testResultsFiles: "${{ parameters.resultsDirectory }}/**/*.trx"
+      mergeTestResults: true
+      failTaskOnFailedTests: true
+
+  - task: PublishCodeCoverageResults@2
+    displayName: Publish code coverage (Cobertura)
+    condition: succeededOrFailed()
+    inputs:
+      summaryFileLocation: "${{ parameters.resultsDirectory }}/**/coverage.cobertura.xml"
+      pathToSources: $(Build.SourcesDirectory)

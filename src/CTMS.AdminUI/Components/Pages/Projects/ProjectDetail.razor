@@ -1,0 +1,100 @@
+@page "/projects/{ProjectId:guid}"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+
+<PageTitle>@(_project?.Name ?? "Project") — CTMS Admin</PageTitle>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading project…" />
+}
+else if (_error is not null)
+{
+    <ErrorAlert Error="_error" OnRetry="LoadAsync" />
+}
+else if (_project is not null)
+{
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+            <li class="breadcrumb-item active" aria-current="page">@_project.Name</li>
+        </ol>
+    </nav>
+
+    <h1 class="h3">@_project.Name</h1>
+
+    <dl class="row mt-3">
+        <dt class="col-sm-3">Slug</dt>
+        <dd class="col-sm-9"><code>@_project.Slug</code></dd>
+
+        <dt class="col-sm-3">Base locale</dt>
+        <dd class="col-sm-9">@_project.BaseLocaleCode</dd>
+
+        <dt class="col-sm-3">Description</dt>
+        <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(_project.Description) ? "—" : _project.Description)</dd>
+
+        <dt class="col-sm-3">Created</dt>
+        <dd class="col-sm-9">@_project.CreatedAt.ToLocalTime().ToString("f")</dd>
+
+        <dt class="col-sm-3">Updated</dt>
+        <dd class="col-sm-9">@_project.UpdatedAt.ToLocalTime().ToString("f")</dd>
+    </dl>
+
+    <p class="text-muted small">
+        @* TODO: the backend exposes no project update/delete endpoint — settings are read-only. *@
+        Project name, slug and base locale are immutable in the current API.
+    </p>
+
+    <div class="row g-3 mt-2">
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{ProjectId}/locales")">
+                <div class="card-body">
+                    <h2 class="h5">Locales</h2>
+                    <p class="text-muted mb-0 small">Manage the locales enabled for this project.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{ProjectId}/keys")">
+                <div class="card-body">
+                    <h2 class="h5">Keys</h2>
+                    <p class="text-muted mb-0 small">Browse translation keys and edit their values.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{ProjectId}/review")">
+                <div class="card-body">
+                    <h2 class="h5">Review queue</h2>
+                    <p class="text-muted mb-0 small">Approve or reject strings awaiting review.</p>
+                </div>
+            </a>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+
+    private bool _loading = true;
+    private ApiError? _error;
+    private ProjectDto? _project;
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        var result = await Api.GetProjectAsync(ProjectId);
+        if (result.IsSuccess)
+        {
+            _project = result.Value;
+        }
+        else
+        {
+            _error = result.Error;
+        }
+        _loading = false;
+    }
+}

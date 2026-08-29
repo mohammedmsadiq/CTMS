@@ -1,0 +1,132 @@
+@page "/projects/{ProjectId:guid}/history"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+
+<PageTitle>History — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item active" aria-current="page">History</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Audit / history</h1>
+    <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_loading">Refresh</button>
+</div>
+
+<p class="text-muted small">
+    Append-only trail across every audited entity in this project — translation strings and
+    published bundles. Newest first.
+</p>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading history…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_page is { Total: 0 })
+{
+    <EmptyState Title="No history yet"
+                Hint="Actions on strings and bundles will show up here." />
+}
+else if (_page is not null)
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">Entity</th>
+                    <th scope="col">Action</th>
+                    <th scope="col">Change</th>
+                    <th scope="col">Actor</th>
+                    <th scope="col">Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var entry in _page.Items)
+                {
+                    <tr>
+                        <td class="text-nowrap">@entry.Timestamp.ToLocalTime().ToString("g")</td>
+                        <td>@entry.EntityType</td>
+                        <td>@entry.Action</td>
+                        <td class="text-nowrap"><StateTransition From="@entry.FromState" To="@entry.ToState" /></td>
+                        <td>@entry.Actor</td>
+                        <td>@(string.IsNullOrWhiteSpace(entry.Detail) ? "—" : entry.Detail)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center">
+        <span class="text-muted small">
+            Showing @(_skip + 1)–@Math.Min(_skip + _take, _page.Total) of @_page.Total
+        </span>
+        <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" @onclick="PrevPage" disabled="@(_skip == 0 || _loading)">Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPage" disabled="@(_skip + _take >= _page.Total || _loading)">Next</button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+
+    private const int _take = 25;
+    private int _skip;
+
+    private bool _loading = true;
+    private ApiError? _loadError;
+    private PagedResult<AuditEntryDto>? _page;
+
+    protected override Task OnParametersSetAsync()
+    {
+        _skip = 0;
+        return LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+
+        var result = await Api.GetProjectHistoryAsync(ProjectId, _skip, _take);
+        if (result.IsSuccess)
+        {
+            _page = result.Value;
+            if (_skip > 0 && _page!.Items.Count == 0)
+            {
+                _skip = Math.Max(0, _skip - _take);
+                _loading = false;
+                await LoadAsync();
+                return;
+            }
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+
+        _loading = false;
+    }
+
+    private Task NextPage()
+    {
+        _skip += _take;
+        return LoadAsync();
+    }
+
+    private Task PrevPage()
+    {
+        _skip = Math.Max(0, _skip - _take);
+        return LoadAsync();
+    }
+}

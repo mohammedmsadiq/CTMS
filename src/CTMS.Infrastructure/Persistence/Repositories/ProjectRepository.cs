@@ -1,27 +1,40 @@
+using CTMS.Application.Common;
 using CTMS.Application.Projects;
 using CTMS.Domain.Projects;
-using Microsoft.EntityFrameworkCore;
+using CTMS.Infrastructure.Persistence.Mongo;
+using MongoDB.Driver;
 
 namespace CTMS.Infrastructure.Persistence.Repositories;
 
 public sealed class ProjectRepository : IProjectRepository
 {
-    private readonly CtmsDbContext _db;
+    private readonly IMongoCollection<Project> _projects;
 
-    public ProjectRepository(CtmsDbContext db) => _db = db;
+    public ProjectRepository(IMongoContext context) => _projects = context.Projects;
 
     public async Task<IReadOnlyList<Project>> ListAsync(CancellationToken cancellationToken = default)
-        => await _db.Projects.AsNoTracking().OrderBy(p => p.Name).ToListAsync(cancellationToken);
+        => await _projects.Find(FilterDefinition<Project>.Empty)
+            .SortBy(p => p.Name)
+            .ToListAsync(cancellationToken);
 
-    public Task<Project?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
-        => _db.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+    public async Task<Project?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => await _projects.Find(p => p.Id == id).FirstOrDefaultAsync(cancellationToken);
+
+    public Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default)
+        => _projects.Find(p => p.Id == id).AnyAsync(cancellationToken);
 
     public Task<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken = default)
-        => _db.Projects.AnyAsync(p => p.Slug == slug, cancellationToken);
+        => _projects.Find(p => p.Slug == slug).AnyAsync(cancellationToken);
 
-    public Task AddAsync(Project project, CancellationToken cancellationToken = default)
+    public async Task AddAsync(Project project, CancellationToken cancellationToken = default)
     {
-        _db.Projects.Add(project);
-        return Task.CompletedTask;
+        try
+        {
+            await _projects.InsertOneAsync(project.StampCreated(), cancellationToken: cancellationToken);
+        }
+        catch (MongoWriteException ex) when (ex.IsDuplicateKey())
+        {
+            throw new SlugAlreadyInUseException(project.Slug);
+        }
     }
 }

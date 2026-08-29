@@ -1,0 +1,134 @@
+# =============================================================================
+# CTMS - Azure DevOps pipeline
+#
+# Triggers
+#   CI  : every push to `main`
+#   PR  : validation build for pull requests targeting `main`
+#
+# Stages
+#   Build    - install SDK, restore, build (warnings-as-errors), test + coverage.
+#              Runs on every CI and PR build.
+#   Package  - `dotnet publish` the API + `docker buildAndPush` the root
+#              Dockerfile to ACR. `main` only.
+#   Deploy   - DISABLED stub (condition: false) that documents where the Azure
+#              Container Apps rollout hooks in. See
+#              .azuredevops/templates/deploy-stage.yml.
+#
+# MongoDB for the test job
+#   No service / resource container is attached. Both suites self-provision and
+#   neither reads ConnectionStrings:CtmsDatabase, so a container would be dead
+#   wiring (GitHub Actions' .github/workflows/ci.yml is deliberately identical):
+#     * tests/CTMS.Application.Tests  - EphemeralMongo (in-process mongod).
+#     * tests/CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent
+#       has a Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo.
+#
+# Variable groups (Pipelines > Library) - referenced, never defined here:
+#   ctms-ci   - shared CI knobs.
+#   ctms-acr  - registry coordinates. Expected keys:
+#                 acrServiceConnection  - Docker registry service connection name
+#                 acrLoginServer        - e.g. myregistry.azurecr.io
+#                 imageRepository       - e.g. ctms/api
+#
+# No secrets or real connection names live in this file.
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  - group: ctms-ci
+  - group: ctms-acr
+  - name: buildConfiguration
+    value: Release
+  - name: vmImage
+    value: ubuntu-latest
+
+stages:
+  # ---------------------------------------------------------------------------
+  - stage: Build
+    displayName: Build & test
+    jobs:
+      - job: build_test
+        displayName: Restore, build, test (+coverage)
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - template: .azuredevops/templates/build-steps.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+
+          - template: .azuredevops/templates/test-steps.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+
+  # ---------------------------------------------------------------------------
+  - stage: Package
+    displayName: Publish & containerise
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: package
+        displayName: dotnet publish + docker buildAndPush
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - task: UseDotNet@2
+            displayName: Install .NET SDK (pinned by global.json)
+            inputs:
+              packageType: sdk
+              useGlobalJson: true
+
+          - task: DotNetCoreCLI@2
+            displayName: dotnet restore
+            inputs:
+              command: restore
+              projects: CTMS.sln
+
+          - task: DotNetCoreCLI@2
+            displayName: dotnet publish (src/CTMS.Api)
+            inputs:
+              command: publish
+              publishWebProjects: false
+              zipAfterPublish: true
+              projects: src/CTMS.Api/CTMS.Api.csproj
+              arguments: >-
+                -c $(buildConfiguration)
+                --no-restore
+                -o "$(Build.ArtifactStagingDirectory)/api"
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish API build artifact
+            inputs:
+              targetPath: "$(Build.ArtifactStagingDirectory)/api"
+              artifact: ctms-api
+
+          # Build context is the repo root, matching the root Dockerfile's
+          # own contract ("Build context MUST be the repository root").
+          - task: Docker@2
+            displayName: Build & push CTMS API image to ACR
+            inputs:
+              command: buildAndPush
+              containerRegistry: $(acrServiceConnection)
+              repository: $(imageRepository)
+              dockerfile: "$(Build.SourcesDirectory)/Dockerfile"
+              buildContext: "$(Build.SourcesDirectory)"
+              tags: |
+                $(Build.BuildNumber)
+                latest
+
+  # ---------------------------------------------------------------------------
+  # DISABLED stub. condition: false lives inside the template's stage.
+  - template: .azuredevops/templates/deploy-stage.yml
+    parameters:
+      dependsOn: Package
+      environmentName: ctms-production
+      acrLoginServer: $(acrLoginServer)
+      imageRepository: $(imageRepository)
+      imageTag: $(Build.BuildNumber)

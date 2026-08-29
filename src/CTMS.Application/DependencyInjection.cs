@@ -1,4 +1,7 @@
+using CTMS.Application.Audit;
+using CTMS.Application.Locales;
 using CTMS.Application.Projects;
+using CTMS.Application.Translations;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CTMS.Application;
@@ -9,6 +12,11 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<ProjectService>();
+        services.AddScoped<LocaleService>();
+        services.AddScoped<TranslationKeyService>();
+        services.AddScoped<TranslationStringService>();
+        services.AddScoped<TranslationBundleService>();
+        services.AddScoped<AuditService>();
         return services;
     }
 }

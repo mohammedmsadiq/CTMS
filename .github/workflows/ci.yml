@@ -1,0 +1,132 @@
+# =============================================================================
+# CTMS - GitHub Actions CI (PR gating + main)
+#
+# Mirrors azure-pipelines.yml's Build stage: restore -> build (warnings-as-errors)
+# -> test (+ coverage). This workflow is the required PR check on `main`.
+#
+# MongoDB for the tests
+# ---------------------
+# No `services:` container is declared. Both test suites self-provision, and
+# NEITHER reads `ConnectionStrings__CtmsDatabase`, so a service container would be
+# dead wiring (the same reason azure-pipelines.yml dropped its `mongo:7` service):
+#
+#   * tests/CTMS.Application.Tests  - EphemeralMongo starts an in-process mongod
+#     (binary provisioned on first use; cached at ~/.cache/ephemeral-mongo). The
+#     CtmsTestHarness connects to the fixture's connection string, not config.
+#   * tests/CTMS.Api.IntegrationTests - MongoFixture prefers a real `mongo:7` via
+#     Testcontainers (the ubuntu-latest runner has a Docker daemon) and falls
+#     back to EphemeralMongo. CtmsApiFactory overrides the API's Mongo config
+#     with the fixture's connection string via WebApplicationFactory.
+#
+# Actions are pinned to major-version tags.
+# No secrets are needed for build + test.
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# One in-flight run per ref; a new push to a PR cancels the superseded run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege. The test-results publisher needs checks/PR write; nothing else does.
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build & test (+coverage)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # EnricoMi/publish-unit-test-result-action posts a check run
+      pull-requests: write # ...and a PR summary comment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET SDK (pinned by global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # No lock files in the repo, so key the cache on the project files + the
+      # shared build props + the SDK pin. ~/.cache/ephemeral-mongo holds the
+      # mongod EphemeralMongo downloads once.
+      - name: Cache NuGet + EphemeralMongo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ~/.cache/ephemeral-mongo
+          key: ${{ runner.os }}-ctms-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'global.json') }}
+          restore-keys: |
+            ${{ runner.os }}-ctms-
+
+      - name: Restore
+        run: dotnet restore CTMS.sln
+
+      # Directory.Build.props sets TreatWarningsAsErrors=true, so any analyzer or
+      # compiler warning fails this step.
+      - name: Build (Release, warnings-as-errors)
+        run: dotnet build CTMS.sln -c Release --no-restore
+
+      - name: Test (+ XPlat Code Coverage)
+        run: >-
+          dotnet test CTMS.sln
+          -c Release
+          --no-build
+          --logger "trx;LogFileName=test.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory ${{ runner.temp }}/testresults
+
+      - name: Upload test results & coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ${{ runner.temp }}/testresults/**/*
+          if-no-files-found: warn
+
+      - name: Publish test report (PR check summary)
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: ${{ !cancelled() }}
+        with:
+          files: ${{ runner.temp }}/testresults/**/*.trx
+          check_name: Test results
+
+  format:
+    name: dotnet format (advisory)
+    runs-on: ubuntu-latest
+    # Non-blocking for now: this surfaces style drift without gating the merge.
+    # Flip `continue-on-error` to false (or drop it) to make it a hard gate once
+    # the tree is known-clean.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET SDK (pinned by global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-ctms-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'global.json') }}
+          restore-keys: |
+            ${{ runner.os }}-ctms-
+
+      - name: Restore
+        run: dotnet restore CTMS.sln
+
+      - name: Verify formatting
+        run: dotnet format CTMS.sln --no-restore --verify-no-changes --severity warn

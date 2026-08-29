@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------------------
+# PRODUCTION override — layer on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml config   # verify
+#
+# It flips the posture set by docker-compose.yml:
+#
+#   ASPNETCORE_ENVIRONMENT  Development -> Production
+#   Seed__Enabled           true        -> false
+#   Auth__Enabled           false       -> true   (+ AzureAd__* from the env)
+#   RateLimit__Enabled      false       -> true
+#   Cors__AllowedOrigins__0 (unset)     -> ${CTMS_ALLOWED_ORIGIN}
+#
+# and hardens the runtime: read-only rootfs, all caps dropped, no privilege
+# escalation, resource limits, mongo/redis no longer published to the host.
+#
+# NO SECRETS IN THIS FILE. Only ${VAR} interpolation — every variable is listed
+# (commented, valueless) in .env.example. Provide real values via a deployment
+# .env, `docker compose --env-file`, or the shell environment.
+# ---------------------------------------------------------------------------
+
+services:
+  mongo:
+    restart: always
+    # Internal only: nothing on the host network reaches Mongo in production.
+    ports: !reset []
+    # Pin a digest in production so the running image is reproducible. Refresh
+    # deliberately: docker inspect --format '{{index .RepoDigests 0}}' mongo:7
+    # image: mongo:7@sha256:<digest>
+    volumes:
+      - mongo-data:/data/db
+
+  redis:
+    restart: always
+    ports: !reset []
+    # Persistence ON in production: the DataProtection key ring lives in Redis
+    # (keyed off ConnectionStrings:Redis), so it must survive a restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    # image: redis:7-alpine@sha256:<digest>
+    volumes:
+      - redis-data:/data
+
+  api:
+    restart: always
+    # Datastores start before the API; compose still honours the base file's
+    # `depends_on: { condition: service_healthy }`.
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Seed__Enabled: "false"
+      # Real JWT bearer validation. AzureAd__* come from the environment — no
+      # values committed. The API is a bearer *validator*: it needs tenant id,
+      # client id and audience, but NO client secret.
+      Auth__Enabled: "true"
+      Auth__PublicBundleReads: "${AUTH_PUBLIC_BUNDLE_READS:-true}"
+      AzureAd__Instance: "${AZUREAD_INSTANCE:-https://login.microsoftonline.com/}"
+      AzureAd__TenantId: "${AZUREAD_TENANT_ID}"
+      AzureAd__ClientId: "${AZUREAD_CLIENT_ID}"
+      AzureAd__Audience: "${AZUREAD_AUDIENCE}"
+      # Request hardening. Defaults below match the app's own defaults, so an
+      # unset var is a no-op; tune via .env.
+      RateLimit__Enabled: "true"
+      RateLimit__PermitPerWindow: "${RATELIMIT_PERMIT_PER_WINDOW:-120}"
+      RateLimit__WindowSeconds: "${RATELIMIT_WINDOW_SECONDS:-60}"
+      RateLimit__QueueLimit: "${RATELIMIT_QUEUE_LIMIT:-0}"
+      RateLimit__BundlePermitPerWindow: "${RATELIMIT_BUNDLE_PERMIT_PER_WINDOW:-600}"
+      # CORS allow-list — first (and here only) origin. Add __1, __2 ... for more.
+      Cors__AllowedOrigins__0: "${CTMS_ALLOWED_ORIGIN}"
+      # Limits__MaxRequestBodyBytes intentionally unset -> app default (256 KB).
+    # --- container hardening ------------------------------------------------
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Read-only rootfs needs a writable scratch area. The image points TMPDIR and
+    # DOTNET_BUNDLE_EXTRACT_BASE_DIR at /tmp; this tmpfs makes /tmp writable
+    # without persisting anything. Verified: the API boots and serves /health.
+    tmpfs:
+      - /tmp
+    # Sane starting envelope for a single API replica — tune to the workload
+    # and the host. `docker compose` reads `deploy.resources` directly.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+volumes:
+  mongo-data:
+    driver: local
+  redis-data:
+    driver: local

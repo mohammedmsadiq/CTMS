@@ -1,0 +1,286 @@
+using CTMS.Application.Audit;
+using CTMS.Application.Common;
+using CTMS.Application.Locales;
+using CTMS.Application.Projects;
+using CTMS.Domain.Audit;
+using CTMS.Domain.Translations;
+
+namespace CTMS.Application.Translations;
+
+/// <summary>Use-case orchestration for translation strings and the review workflow.</summary>
+public sealed class TranslationStringService
+{
+    private const string SystemActor = "system";
+    private const string AuditEntityType = "TranslationString";
+    private const int DefaultPageSize = 50;
+    private const int MaxPageSize = 200;
+
+    private readonly ITranslationStringRepository _strings;
+    private readonly ITranslationKeyRepository _keys;
+    private readonly ILocaleRepository _locales;
+    private readonly IProjectRepository _projects;
+    private readonly IAuditRepository _audit;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public TranslationStringService(
+        ITranslationStringRepository strings,
+        ITranslationKeyRepository keys,
+        ILocaleRepository locales,
+        IProjectRepository projects,
+        IAuditRepository audit,
+        IUnitOfWork unitOfWork)
+    {
+        _strings = strings;
+        _keys = keys;
+        _locales = locales;
+        _projects = projects;
+        _audit = audit;
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task<IReadOnlyList<TranslationStringDto>?> ListByKeyAsync(
+        Guid projectId,
+        Guid keyId,
+        CancellationToken cancellationToken = default)
+    {
+        var key = await _keys.GetAsync(projectId, keyId, cancellationToken);
+        if (key is null)
+        {
+            return null;
+        }
+
+        var codeByLocaleId = (await _locales.ListByProjectAsync(projectId, cancellationToken))
+            .ToDictionary(locale => locale.Id, locale => locale.Code);
+
+        var strings = await _strings.ListByKeyAsync(keyId, cancellationToken);
+
+        return strings
+            .Select(s => ToDto(s, codeByLocaleId.GetValueOrDefault(s.LocaleId, string.Empty)))
+            .ToList();
+    }
+
+    public async Task<TranslationStringDto?> GetAsync(
+        Guid projectId,
+        Guid keyId,
+        Guid localeId,
+        CancellationToken cancellationToken = default)
+    {
+        var key = await _keys.GetAsync(projectId, keyId, cancellationToken);
+        if (key is null)
+        {
+            return null;
+        }
+
+        var locale = await _locales.GetAsync(projectId, localeId, cancellationToken);
+        if (locale is null)
+        {
+            return null;
+        }
+
+        var translationString = await _strings.GetAsync(keyId, localeId, cancellationToken);
+        return translationString is null ? null : ToDto(translationString, locale.Code);
+    }
+
+    /// <summary>
+    /// One page of every string in a project, newest-updated first, optionally filtered by review
+    /// state. Returns <c>null</c> when the project is unknown.
+    /// </summary>
+    /// <exception cref="ValidationException"><paramref name="reviewState"/> is not a valid state name.</exception>
+    public async Task<PagedResult<TranslationStringDto>?> ListByProjectAsync(
+        Guid projectId,
+        string? reviewState,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        var stateFilter = ParseReviewState(reviewState);
+
+        if (!await _projects.ExistsAsync(projectId, cancellationToken))
+        {
+            return null;
+        }
+
+        if (skip < 0)
+        {
+            skip = 0;
+        }
+
+        take = take switch
+        {
+            <= 0 => DefaultPageSize,
+            > MaxPageSize => MaxPageSize,
+            _ => take,
+        };
+
+        var keyIds = (await _keys.ListByProjectAsync(projectId, 0, int.MaxValue, cancellationToken))
+            .Select(k => k.Id)
+            .ToList();
+
+        var codeByLocaleId = (await _locales.ListByProjectAsync(projectId, cancellationToken))
+            .ToDictionary(locale => locale.Id, locale => locale.Code);
+
+        var page = await _strings.ListByKeysAndStateAsync(keyIds, stateFilter, skip, take, cancellationToken);
+
+        return new PagedResult<TranslationStringDto>(
+            page.Items.Select(s => ToDto(s, codeByLocaleId.GetValueOrDefault(s.LocaleId, string.Empty))).ToList(),
+            page.Total);
+    }
+
+    private static ReviewState? ParseReviewState(string? reviewState)
+    {
+        if (string.IsNullOrWhiteSpace(reviewState))
+        {
+            return null;
+        }
+
+        var candidate = reviewState.Trim();
+        if (!int.TryParse(candidate, out _)
+            && Enum.TryParse<ReviewState>(candidate, ignoreCase: false, out var parsed)
+            && Enum.IsDefined(parsed))
+        {
+            return parsed;
+        }
+
+        throw new ValidationException(
+            $"'{reviewState}' is not a valid review state. Expected one of: {string.Join(", ", Enum.GetNames<ReviewState>())}.");
+    }
+
+    public async Task<UpsertTranslationStringResult> UpsertAsync(
+        Guid projectId,
+        Guid keyId,
+        Guid localeId,
+        UpsertTranslationStringRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrEmpty(request.Value))
+        {
+            throw new ValidationException("A translation value is required.");
+        }
+
+        var key = await _keys.GetAsync(projectId, keyId, cancellationToken)
+            ?? throw new NotFoundException($"Translation key '{keyId}' was not found in project '{projectId}'.");
+
+        var locale = await _locales.GetAsync(projectId, localeId, cancellationToken)
+            ?? throw new NotFoundException($"Locale '{localeId}' was not found in project '{projectId}'.");
+
+        var actor = string.IsNullOrWhiteSpace(request.UpdatedBy) ? SystemActor : request.UpdatedBy!;
+        var existing = await _strings.GetAsync(keyId, localeId, cancellationToken);
+
+        if (existing is null)
+        {
+            var created = new TranslationString(key.Id, locale.Id, request.Value, actor);
+            await _strings.AddAsync(created, cancellationToken);
+            await _audit.AppendAsync(
+                new AuditEntry(
+                    projectId,
+                    AuditEntityType,
+                    created.Id,
+                    AuditAction.Created,
+                    actor,
+                    toState: created.ReviewState),
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return new UpsertTranslationStringResult(ToDto(created, locale.Code), Created: true);
+        }
+
+        if (request.ExpectedVersion is { } expected && expected != existing.Version)
+        {
+            throw new ConcurrencyException(existing.Version);
+        }
+
+        var fromState = existing.ReviewState;
+        existing.Edit(request.Value, actor);
+        await _strings.UpdateAsync(existing, cancellationToken);
+        await _audit.AppendAsync(
+            new AuditEntry(
+                projectId,
+                AuditEntityType,
+                existing.Id,
+                AuditAction.Edited,
+                actor,
+                fromState,
+                existing.ReviewState),
+            cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new UpsertTranslationStringResult(ToDto(existing, locale.Code), Created: false);
+    }
+
+    public async Task<TranslationStringDto?> ReviewAsync(
+        Guid projectId,
+        Guid keyId,
+        Guid localeId,
+        string action,
+        string reviewedBy,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reviewedBy))
+        {
+            throw new ValidationException("A reviewer is required.");
+        }
+
+        var (target, auditAction) = ResolveReviewAction(action);
+
+        var key = await _keys.GetAsync(projectId, keyId, cancellationToken);
+        if (key is null)
+        {
+            return null;
+        }
+
+        var locale = await _locales.GetAsync(projectId, localeId, cancellationToken);
+        if (locale is null)
+        {
+            return null;
+        }
+
+        var translationString = await _strings.GetAsync(keyId, localeId, cancellationToken);
+        if (translationString is null)
+        {
+            return null;
+        }
+
+        var fromState = translationString.ReviewState;
+        translationString.ChangeReviewState(target, reviewedBy);
+        await _strings.UpdateAsync(translationString, cancellationToken);
+        await _audit.AppendAsync(
+            new AuditEntry(
+                projectId,
+                AuditEntityType,
+                translationString.Id,
+                auditAction,
+                reviewedBy,
+                fromState,
+                translationString.ReviewState),
+            cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return ToDto(translationString, locale.Code);
+    }
+
+    private static (ReviewState Target, AuditAction Audit) ResolveReviewAction(string action) =>
+        action?.Trim().ToLowerInvariant() switch
+        {
+            "submit" => (ReviewState.NeedsReview, AuditAction.Submitted),
+            "approve" => (ReviewState.Approved, AuditAction.Approved),
+            "reject" => (ReviewState.Draft, AuditAction.Rejected),
+            "reopen" => (ReviewState.NeedsReview, AuditAction.Reopened),
+            "publish" => (ReviewState.Published, AuditAction.Published),
+            _ => throw new ValidationException(
+                $"Unknown review action '{action}'. Expected 'submit', 'approve', 'reject', 'reopen' or 'publish'."),
+        };
+
+    private static TranslationStringDto ToDto(TranslationString s, string localeCode) => new(
+        s.Id,
+        s.TranslationKeyId,
+        s.LocaleId,
+        localeCode,
+        s.Value,
+        s.ReviewState.ToString(),
+        s.UpdatedBy,
+        s.Version,
+        s.CreatedAt,
+        s.UpdatedAt);
+}

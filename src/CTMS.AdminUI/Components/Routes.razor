@@ -1,0 +1,25 @@
+@using CTMS.AdminUI.Components.Auth
+
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                @if (context.User.Identity?.IsAuthenticated != true)
+                {
+                    <RedirectToSignIn />
+                }
+                else
+                {
+                    <div class="p-4">
+                        <h1 class="h4">Not authorised</h1>
+                        <p class="text-muted">
+                            Your account is signed in but has no CTMS role that grants access to this page.
+                            Ask an administrator to assign one of the <code>ctms.*</code> app roles.
+                        </p>
+                    </div>
+                }
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

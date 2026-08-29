@@ -1,4 +1,5 @@
 using CTMS.Application.Common;
+using CTMS.Domain.Translations;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 
@@ -19,8 +20,12 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
     {
         var (statusCode, title) = exception switch
         {
-            SlugAlreadyInUseException => (StatusCodes.Status409Conflict, "Slug already in use"),
             ValidationException => (StatusCodes.Status400BadRequest, "Invalid request"),
+            NotFoundException => (StatusCodes.Status404NotFound, "Resource not found"),
+            SlugAlreadyInUseException => (StatusCodes.Status409Conflict, "Slug already in use"),
+            ConflictException => (StatusCodes.Status409Conflict, "Conflict"),
+            ConcurrencyException => (StatusCodes.Status409Conflict, "Concurrency conflict"),
+            InvalidReviewTransitionException => (StatusCodes.Status409Conflict, "Invalid review transition"),
             _ => (0, string.Empty),
         };
 
@@ -31,15 +36,22 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
 
         httpContext.Response.StatusCode = statusCode;
 
+        var problemDetails = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Detail = exception.Message,
+        };
+
+        if (exception is ConcurrencyException concurrency)
+        {
+            problemDetails.Extensions["currentVersion"] = concurrency.CurrentVersion;
+        }
+
         return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = httpContext,
-            ProblemDetails = new ProblemDetails
-            {
-                Status = statusCode,
-                Title = title,
-                Detail = exception.Message,
-            },
+            ProblemDetails = problemDetails,
         });
     }
 }

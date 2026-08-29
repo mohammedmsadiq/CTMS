@@ -1,0 +1,40 @@
+# -----------------------------------------------------------------------------
+# Reusable build steps for CTMS.
+#
+# Installs the exact .NET SDK pinned in global.json, restores the solution and
+# builds it in the requested configuration. The build is warnings-as-errors
+# (see Directory.Build.props: <TreatWarningsAsErrors>true</TreatWarningsAsErrors>),
+# so any analyzer or compiler warning fails this template.
+#
+# Consumed by azure-pipelines.yml. Keep it free of secrets and pool config.
+# -----------------------------------------------------------------------------
+parameters:
+  - name: buildConfiguration
+    type: string
+    default: Release
+  - name: solution
+    type: string
+    default: CTMS.sln
+
+steps:
+  - task: UseDotNet@2
+    displayName: Install .NET SDK (pinned by global.json)
+    inputs:
+      packageType: sdk
+      useGlobalJson: true
+
+  - script: dotnet --info
+    displayName: Report .NET SDK version
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet restore
+    inputs:
+      command: restore
+      projects: ${{ parameters.solution }}
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet build (${{ parameters.buildConfiguration }}, --no-restore)
+    inputs:
+      command: build
+      projects: ${{ parameters.solution }}
+      arguments: -c ${{ parameters.buildConfiguration }} --no-restore

@@ -1,0 +1,32 @@
+# Optional dev convenience: run the API with `dotnet watch` and the source
+# bind-mounted, so edits under src/ trigger a hot rebuild inside the container.
+#
+# To use it:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up
+#
+# `docker-compose.override.yml` is picked up automatically and is git-ignored.
+# Leave it out entirely to run the production-style published image instead.
+
+services:
+  api:
+    build:
+      # Stop at the SDK stage so the container has the full toolchain.
+      target: build
+    # Re-run from source instead of the published DLL.
+    working_dir: /src/src/CTMS.Api
+    command: ["dotnet", "watch", "run", "--no-launch-profile"]
+    volumes:
+      # Live source. Anonymous volumes keep bin/obj from leaking into the host.
+      - ./src:/src/src
+      - ./tests:/src/tests
+      - ./Directory.Build.props:/src/Directory.Build.props
+      - ./CTMS.sln:/src/CTMS.sln
+      - ./global.json:/src/global.json
+      - /src/src/CTMS.Api/bin
+      - /src/src/CTMS.Api/obj
+    environment:
+      DOTNET_USE_POLLING_FILE_WATCHER: "true"
+      DOTNET_WATCH_RESTART_ON_RUDE_EDIT: "true"
+      ASPNETCORE_ENVIRONMENT: "Development"
+      ASPNETCORE_URLS: "http://+:8080"

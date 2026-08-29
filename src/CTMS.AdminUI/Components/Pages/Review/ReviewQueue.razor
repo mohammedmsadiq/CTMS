@@ -1,0 +1,172 @@
+@page "/projects/{ProjectId:guid}/review"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+@inject CurrentUser CurrentUser
+
+<PageTitle>Review queue — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Review queue</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Review queue</h1>
+    <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_loading">Refresh</button>
+</div>
+
+<p class="text-muted small">
+    @* The backend has no "list strings by review state" endpoint yet; this view is composed
+       client-side by scanning the project's keys. It may be slow for very large projects. *@
+    Strings currently in <strong>NeedsReview</strong>. Composed by scanning keys — large projects may load slowly.
+</p>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="@($"Scanning keys… ({_scanned}/{_total})")" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_items.Count == 0)
+{
+    <EmptyState Title="Nothing to review" Hint="No strings are waiting for review in this project." />
+}
+else
+{
+    <ErrorAlert Error="_rowError" />
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Key</th>
+                    <th scope="col">Locale</th>
+                    <th scope="col">Value</th>
+                    <th scope="col">Updated by</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _items)
+                {
+                    <tr>
+                        <td>
+                            <a href="@($"projects/{ProjectId}/keys/{item.KeyId}/strings")"><code>@item.KeyName</code></a>
+                        </td>
+                        <td><code>@item.String.LocaleCode</code></td>
+                        <td class="text-truncate" style="max-width: 28rem;">@item.String.Value</td>
+                        <td>@(string.IsNullOrWhiteSpace(item.String.UpdatedBy) ? "—" : item.String.UpdatedBy)</td>
+                        <td class="text-end text-nowrap">
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanReview" Context="review">
+                                <button class="btn btn-sm btn-outline-success" disabled="@_busyId.Equals(item.String.Id)"
+                                        @onclick="() => ReviewAsync(item, ReviewActions.Approve)">
+                                    Approve
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" disabled="@_busyId.Equals(item.String.Id)"
+                                        @onclick="() => ReviewAsync(item, ReviewActions.Reject)">
+                                    Reject
+                                </button>
+                            </AuthorizeView>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+
+    private const int _pageSize = 200;
+    private bool _loading = true;
+    private int _scanned;
+    private int _total;
+    private Guid _busyId;
+    private ApiError? _loadError;
+    private ApiError? _rowError;
+    private readonly List<QueueItem> _items = new();
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _rowError = null;
+        _items.Clear();
+        _scanned = 0;
+        _total = 0;
+        StateHasChanged();
+
+        var skip = 0;
+        while (true)
+        {
+            var keysResult = await Api.GetKeysAsync(ProjectId, skip, _pageSize);
+            if (keysResult.IsFailure)
+            {
+                _loadError = keysResult.Error;
+                _loading = false;
+                return;
+            }
+
+            var page = keysResult.Value!;
+            _total = page.Total;
+
+            foreach (var key in page.Items)
+            {
+                var stringsResult = await Api.GetStringsAsync(ProjectId, key.Id);
+                _scanned++;
+                if (stringsResult.IsFailure)
+                {
+                    _loadError = stringsResult.Error;
+                    _loading = false;
+                    return;
+                }
+
+                foreach (var s in stringsResult.Value!.Where(s => s.ReviewState == ReviewStates.NeedsReview))
+                {
+                    _items.Add(new QueueItem(key.Id, key.KeyName, s));
+                }
+
+                if (_scanned % 10 == 0)
+                {
+                    StateHasChanged();
+                }
+            }
+
+            skip += _pageSize;
+            if (skip >= page.Total || page.Items.Count == 0)
+            {
+                break;
+            }
+        }
+
+        _items.Sort((a, b) => a.KeyName.CompareTo(b.KeyName));
+        _loading = false;
+    }
+
+    private async Task ReviewAsync(QueueItem item, string action)
+    {
+        _busyId = item.String.Id;
+        _rowError = null;
+        var result = await Api.ReviewStringAsync(ProjectId, item.KeyId, item.String.LocaleId,
+            new ReviewRequest(action, CurrentUser.DisplayName));
+        _busyId = Guid.Empty;
+
+        if (result.IsSuccess)
+        {
+            _items.Remove(item);
+        }
+        else
+        {
+            _rowError = result.Error;
+        }
+    }
+
+    private sealed record QueueItem(Guid KeyId, string KeyName, TranslationStringDto String);
+}

@@ -1,43 +1,28 @@
 using CTMS.Application.Common;
 using CTMS.Application.Projects;
-using CTMS.Infrastructure.Persistence;
-using CTMS.Infrastructure.Persistence.Repositories;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
+using CTMS.Application.Tests.Infrastructure;
 
 namespace CTMS.Application.Tests;
 
+[Collection("mongo")]
 public sealed class ProjectServiceTests : IDisposable
 {
-    private readonly SqliteConnection _connection;
-    private readonly CtmsDbContext _context;
-    private readonly ProjectService _service;
+    private readonly CtmsTestHarness _harness;
 
-    public ProjectServiceTests()
-    {
-        _connection = new SqliteConnection("Filename=:memory:");
-        _connection.Open();
+    public ProjectServiceTests(MongoFixture fixture) => _harness = new CtmsTestHarness(fixture.ConnectionString);
 
-        var options = new DbContextOptionsBuilder<CtmsDbContext>()
-            .UseSqlite(_connection)
-            .Options;
-
-        _context = new CtmsDbContext(options);
-        _context.Database.EnsureCreated();
-
-        _service = new ProjectService(new ProjectRepository(_context), _context);
-    }
+    private ProjectService Service => _harness.ProjectService;
 
     [Fact]
     public async Task CreateAsync_persists_the_project_and_derives_a_slug_from_the_name()
     {
-        var created = await _service.CreateAsync(new CreateProjectRequest("Acme Web", "en"));
+        var created = await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en"));
 
         Assert.NotEqual(Guid.Empty, created.Id);
         Assert.Equal("acme-web", created.Slug);
         Assert.NotEqual(default, created.CreatedAt);
 
-        var persisted = await _context.Projects.AsNoTracking().SingleAsync();
+        var persisted = Assert.Single(await _harness.Projects.ListAsync());
         Assert.Equal("Acme Web", persisted.Name);
         Assert.Equal("en", persisted.BaseLocaleCode);
         Assert.Equal(created.Id, persisted.Id);
@@ -46,19 +31,19 @@ public sealed class ProjectServiceTests : IDisposable
     [Fact]
     public async Task CreateAsync_rejects_a_duplicate_slug()
     {
-        await _service.CreateAsync(new CreateProjectRequest("Acme Web", "en"));
+        await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en"));
 
         var exception = await Assert.ThrowsAsync<SlugAlreadyInUseException>(
-            () => _service.CreateAsync(new CreateProjectRequest("  ACME   Web  ", "fr")));
+            () => Service.CreateAsync(new CreateProjectRequest("  ACME   Web  ", "fr")));
 
         Assert.Equal("acme-web", exception.Slug);
-        Assert.Equal(1, await _context.Projects.CountAsync());
+        Assert.Single(await _harness.Projects.ListAsync());
     }
 
     [Fact]
     public async Task CreateAsync_honours_an_explicit_slug()
     {
-        var created = await _service.CreateAsync(
+        var created = await Service.CreateAsync(
             new CreateProjectRequest("Acme Web", "en", Slug: "Marketing Site"));
 
         Assert.Equal("marketing-site", created.Slug);
@@ -68,18 +53,14 @@ public sealed class ProjectServiceTests : IDisposable
     public async Task CreateAsync_rejects_a_blank_name()
     {
         await Assert.ThrowsAsync<ValidationException>(
-            () => _service.CreateAsync(new CreateProjectRequest("   ", "en")));
+            () => Service.CreateAsync(new CreateProjectRequest("   ", "en")));
     }
 
     [Fact]
     public async Task GetAsync_returns_null_for_an_unknown_id()
     {
-        Assert.Null(await _service.GetAsync(Guid.NewGuid()));
+        Assert.Null(await Service.GetAsync(Guid.NewGuid()));
     }
 
-    public void Dispose()
-    {
-        _context.Dispose();
-        _connection.Dispose();
-    }
+    public void Dispose() => _harness.Dispose();
 }

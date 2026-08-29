@@ -7,7 +7,7 @@ public sealed class Locale : Entity
 {
     private Locale()
     {
-        // EF Core materialization constructor.
+        // Materialization constructor for the persistence layer.
     }
 
     public Locale(Guid projectId, string code, string displayName, bool isRtl = false)
@@ -34,6 +34,12 @@ public sealed class Locale : Entity
     public string DisplayName { get; private set; } = string.Empty;
 
     public bool IsRtl { get; private set; }
+
+    public void SetDisplayName(string displayName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        DisplayName = displayName.Trim();
+    }
 
     public void SetRightToLeft(bool isRtl) => IsRtl = isRtl;
 }

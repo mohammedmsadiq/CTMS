@@ -1,0 +1,377 @@
+@page "/projects/{ProjectId:guid}/keys/{KeyId:guid}/strings"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+@inject CurrentUser CurrentUser
+
+<PageTitle>@(_key?.KeyName ?? "Strings") — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}/keys")">Keys</a></li>
+        <li class="breadcrumb-item active" aria-current="page">@(_key?.KeyName ?? "Strings")</li>
+    </ol>
+</nav>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading strings…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_key is not null)
+{
+    <h1 class="h4"><code>@_key.KeyName</code></h1>
+    @if (!string.IsNullOrWhiteSpace(_key.Description))
+    {
+        <p class="text-muted">@_key.Description</p>
+    }
+
+    @if (_rows.Count == 0)
+    {
+        <EmptyState Title="No locales enabled"
+                    Hint="Add a locale to this project before entering translations." />
+    }
+    else
+    {
+        <div class="vstack gap-3">
+            @foreach (var row in _rows)
+            {
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                            <div>
+                                <strong>@row.Locale.DisplayName</strong>
+                                <code class="ms-2">@row.Locale.Code</code>
+                                @if (row.Locale.IsRtl)
+                                {
+                                    <span class="badge text-bg-light ms-2">RTL</span>
+                                }
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                @if (row.Persisted is not null)
+                                {
+                                    <ReviewStateBadge State="@row.Persisted.ReviewState" />
+                                    <span class="text-muted small">v@(row.Persisted.Version)</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-light">not translated</span>
+                                }
+                            </div>
+                        </div>
+
+                        <textarea class="form-control @(row.Dirty ? "border-primary" : "")"
+                                  rows="2"
+                                  dir="@(row.Locale.IsRtl ? "rtl" : "ltr")"
+                                  aria-label="@($"Value for {row.Locale.Code}")"
+                                  @bind="row.Draft"
+                                  @bind:event="oninput"></textarea>
+
+                        @if (row.Conflict is not null)
+                        {
+                            <div class="alert alert-warning mt-2 mb-0">
+                                This string changed on the server (now v@(row.Conflict.CurrentVersion)).
+                                Your edit was not saved.
+                                <button class="btn btn-sm btn-outline-dark ms-2" @onclick="() => ReloadRowAsync(row)">
+                                    Reload row
+                                </button>
+                            </div>
+                        }
+                        else if (row.Error is not null)
+                        {
+                            <div class="mt-2"><ErrorAlert Error="row.Error" /></div>
+                        }
+                        else if (row.SavedFlash)
+                        {
+                            <div class="text-success small mt-2">Saved.</div>
+                        }
+
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2">
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanEditStrings" Context="edit">
+                                <div class="btn-group">
+                                    <button class="btn btn-sm btn-primary"
+                                            disabled="@(row.Busy || !row.Dirty || string.IsNullOrEmpty(row.Draft))"
+                                            @onclick="() => SaveAsync(row)">
+                                        @if (row.Busy)
+                                        {
+                                            <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                        }
+                                        Save
+                                    </button>
+                                    @if (row.Dirty)
+                                    {
+                                        <button class="btn btn-sm btn-link" disabled="@row.Busy" @onclick="() => ResetDraft(row)">
+                                            Discard
+                                        </button>
+                                    }
+                                </div>
+                            </AuthorizeView>
+
+                            @if (row.Persisted is not null)
+                            {
+                                <AuthorizeView Policy="@AuthorizationPolicies.CanReview" Context="review">
+                                    <div class="btn-group">
+                                        @foreach (var (action, label) in ReviewActions.ForState(row.Persisted.ReviewState))
+                                        {
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                    disabled="@row.Busy"
+                                                    @onclick="() => ReviewAsync(row, action)">
+                                                @label
+                                            </button>
+                                        }
+                                    </div>
+                                </AuthorizeView>
+                            }
+                        </div>
+
+                        @if (row.Persisted is not null)
+                        {
+                            <div class="text-muted small mt-2">
+                                Updated @row.Persisted.UpdatedAt.ToLocalTime().ToString("g")
+                                @(string.IsNullOrWhiteSpace(row.Persisted.UpdatedBy) ? "" : $" by {row.Persisted.UpdatedBy}")
+                            </div>
+
+                            <div class="mt-2">
+                                <button type="button" class="btn btn-sm btn-link p-0"
+                                        aria-expanded="@row.ShowHistory"
+                                        @onclick="() => ToggleHistoryAsync(row)">
+                                    @(row.ShowHistory ? "Hide history" : "History")
+                                </button>
+
+                                @if (row.ShowHistory)
+                                {
+                                    @if (row.HistoryLoading)
+                                    {
+                                        <LoadingSpinner Message="Loading history…" />
+                                    }
+                                    else if (row.HistoryError is not null)
+                                    {
+                                        <div class="mt-2"><ErrorAlert Error="row.HistoryError" /></div>
+                                    }
+                                    else if (row.History is { Count: 0 })
+                                    {
+                                        <p class="text-muted small mt-2 mb-0">No history recorded for this string yet.</p>
+                                    }
+                                    else if (row.History is not null)
+                                    {
+                                        <div class="table-responsive mt-2">
+                                            <table class="table table-sm small mb-0">
+                                                <thead>
+                                                    <tr>
+                                                        <th scope="col">When</th>
+                                                        <th scope="col">Action</th>
+                                                        <th scope="col">Change</th>
+                                                        <th scope="col">Actor</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach (var h in row.History)
+                                                    {
+                                                        <tr>
+                                                            <td class="text-nowrap">@h.Timestamp.ToLocalTime().ToString("g")</td>
+                                                            <td>@h.Action</td>
+                                                            <td class="text-nowrap"><StateTransition From="@h.FromState" To="@h.ToState" /></td>
+                                                            <td>@h.Actor</td>
+                                                        </tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public Guid KeyId { get; set; }
+
+    private bool _loading = true;
+    private ApiError? _loadError;
+    private TranslationKeyDto? _key;
+    private readonly List<Row> _rows = new();
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _rows.Clear();
+
+        var keyTask = Api.GetKeyAsync(ProjectId, KeyId);
+        var localesTask = Api.GetLocalesAsync(ProjectId);
+        var stringsTask = Api.GetStringsAsync(ProjectId, KeyId);
+        await Task.WhenAll(keyTask, localesTask, stringsTask);
+
+        if (keyTask.Result.IsFailure) { _loadError = keyTask.Result.Error; _loading = false; return; }
+        if (localesTask.Result.IsFailure) { _loadError = localesTask.Result.Error; _loading = false; return; }
+        if (stringsTask.Result.IsFailure) { _loadError = stringsTask.Result.Error; _loading = false; return; }
+
+        _key = keyTask.Result.Value;
+        var strings = stringsTask.Result.Value!.ToDictionary(s => s.LocaleId);
+
+        foreach (var locale in localesTask.Result.Value!.OrderBy(l => l.Code, StringComparer.OrdinalIgnoreCase))
+        {
+            strings.TryGetValue(locale.Id, out var s);
+            _rows.Add(new Row(locale, s));
+        }
+
+        _loading = false;
+    }
+
+    private static void ResetDraft(Row row)
+    {
+        row.Draft = row.Persisted?.Value ?? "";
+        row.Error = null;
+        row.Conflict = null;
+    }
+
+    private async Task SaveAsync(Row row)
+    {
+        row.Busy = true;
+        row.Error = null;
+        row.Conflict = null;
+        row.SavedFlash = false;
+
+        var request = new UpsertTranslationStringRequest(
+            row.Draft,
+            CurrentUser.DisplayName,
+            row.Persisted?.Version);
+
+        var result = await Api.UpsertStringAsync(ProjectId, KeyId, row.Locale.Id, request);
+        row.Busy = false;
+
+        if (result.IsSuccess)
+        {
+            row.SetPersisted(result.Value!);
+            row.SavedFlash = true;
+            if (row.ShowHistory)
+            {
+                await LoadHistoryAsync(row);
+            }
+        }
+        else if (result.Error!.IsConcurrencyConflict)
+        {
+            row.Conflict = result.Error;
+        }
+        else
+        {
+            row.Error = result.Error;
+        }
+    }
+
+    private async Task ReloadRowAsync(Row row)
+    {
+        row.Busy = true;
+        var result = await Api.GetStringAsync(ProjectId, KeyId, row.Locale.Id);
+        row.Busy = false;
+
+        if (result.IsSuccess)
+        {
+            row.SetPersisted(result.Value!);
+            row.Conflict = null;
+            row.Error = null;
+        }
+        else
+        {
+            row.Error = result.Error;
+        }
+    }
+
+    private async Task ReviewAsync(Row row, string action)
+    {
+        row.Busy = true;
+        row.Error = null;
+        row.Conflict = null;
+        row.SavedFlash = false;
+
+        var result = await Api.ReviewStringAsync(ProjectId, KeyId, row.Locale.Id,
+            new ReviewRequest(action, CurrentUser.DisplayName));
+        row.Busy = false;
+
+        if (result.IsSuccess)
+        {
+            row.SetPersisted(result.Value!);
+            if (row.ShowHistory)
+            {
+                await LoadHistoryAsync(row);
+            }
+        }
+        else
+        {
+            row.Error = result.Error;
+        }
+    }
+
+    private async Task ToggleHistoryAsync(Row row)
+    {
+        row.ShowHistory = !row.ShowHistory;
+        if (row.ShowHistory && row.History is null && !row.HistoryLoading)
+        {
+            await LoadHistoryAsync(row);
+        }
+    }
+
+    private async Task LoadHistoryAsync(Row row)
+    {
+        row.HistoryLoading = true;
+        row.HistoryError = null;
+        StateHasChanged();
+
+        var result = await Api.GetStringHistoryAsync(ProjectId, KeyId, row.Locale.Id);
+        row.HistoryLoading = false;
+
+        if (result.IsSuccess)
+        {
+            row.History = result.Value;
+        }
+        else
+        {
+            row.HistoryError = result.Error;
+        }
+    }
+
+    private sealed class Row
+    {
+        public Row(LocaleDto locale, TranslationStringDto? persisted)
+        {
+            Locale = locale;
+            SetPersisted(persisted);
+        }
+
+        public LocaleDto Locale { get; }
+        public TranslationStringDto? Persisted { get; private set; }
+        public string Draft { get; set; } = "";
+        public bool Busy { get; set; }
+        public bool SavedFlash { get; set; }
+        public ApiError? Error { get; set; }
+        public ApiError? Conflict { get; set; }
+
+        public bool ShowHistory { get; set; }
+        public bool HistoryLoading { get; set; }
+        public IReadOnlyList<AuditEntryDto>? History { get; set; }
+        public ApiError? HistoryError { get; set; }
+
+        public bool Dirty => Draft != (Persisted?.Value ?? "");
+
+        public void SetPersisted(TranslationStringDto? dto)
+        {
+            Persisted = dto;
+            Draft = dto?.Value ?? "";
+            // Any write invalidates a previously loaded history; force a re-fetch on next view.
+            History = null;
+            HistoryError = null;
+        }
+    }
+}

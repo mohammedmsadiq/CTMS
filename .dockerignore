@@ -1,0 +1,56 @@
+# Build output
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# Test results / coverage
+**/TestResults/
+**/coverage/
+*.trx
+*.coverage
+
+# VCS / editor / tooling metadata
+.git/
+.gitignore
+.gitattributes
+.vs/
+.vscode/
+.idea/
+.claude/
+*.user
+*.suo
+*.DS_Store
+
+# Local-only configuration and secrets — never bake into the image
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/*.local.json
+.env
+.env.*
+!.env.example
+
+# Docker / compose files themselves
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+docker-compose*.yml.example
+
+# Docs and deployment IaC (not needed by the build)
+docs/
+deploy/
+*.md
+!README.md
+LICENSE
+
+# The runtime image only builds the CTMS.Api project graph
+# (Api -> Application -> Domain, Infrastructure). Everything below is outside
+# that graph — keeping it out of the build context makes `docker build` faster
+# and the layer cache tighter.
+.github/
+.azuredevops/
+azure-pipelines.yml
+samples/
+tests/
+src/CTMS.AdminUI/
+src/CTMS.Client*/
