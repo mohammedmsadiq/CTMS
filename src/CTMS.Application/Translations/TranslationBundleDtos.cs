@@ -13,3 +13,20 @@ public sealed record TranslationBundleDto(
     string ETag,
     string CreatedBy,
     DateTime CreatedAt);
+
+/// <summary>
+/// Lightweight descriptor of one published bundle version, without the entries payload. Used by
+/// the version-history listing.
+/// </summary>
+public sealed record BundleVersionDto(
+    int Version,
+    string ETag,
+    DateTime CreatedAt,
+    string CreatedBy,
+    int EntryCount);
+
+/// <summary>
+/// Optional body for the publish endpoint. When <see cref="PublishedBy"/> is omitted the actor
+/// recorded on the bundle and its audit entry falls back to <c>"system"</c>.
+/// </summary>
+public sealed record PublishBundleRequest(string? PublishedBy = null);

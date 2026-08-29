@@ -46,10 +46,21 @@ public sealed class MongoIndexInitializer : IHostedService
                 unique),
             cancellationToken: cancellationToken);
 
-        await context.TranslationStrings.Indexes.CreateOneAsync(
-            new CreateIndexModel<TranslationString>(
-                Builders<TranslationString>.IndexKeys.Ascending(s => s.TranslationKeyId).Ascending(s => s.LocaleId),
-                unique),
+        await context.TranslationStrings.Indexes.CreateManyAsync(
+            new[]
+            {
+                new CreateIndexModel<TranslationString>(
+                    Builders<TranslationString>.IndexKeys.Ascending(s => s.TranslationKeyId).Ascending(s => s.LocaleId),
+                    unique),
+
+                // Backs the project-wide review-state listing: filter by key set (+ optional
+                // review state), sorted newest-updated first.
+                new CreateIndexModel<TranslationString>(
+                    Builders<TranslationString>.IndexKeys
+                        .Ascending(s => s.TranslationKeyId)
+                        .Ascending(s => s.ReviewState)
+                        .Descending(s => s.UpdatedAt)),
+            },
             cancellationToken: cancellationToken);
 
         await context.TranslationBundles.Indexes.CreateOneAsync(

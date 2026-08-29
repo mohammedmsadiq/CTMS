@@ -137,6 +137,24 @@ optimistic-concurrency token (`long`); `expectedVersion` is `long?`.
 | `GET /api/projects/{projectId:guid}/keys/{keyId:guid}/strings` | - | `200` `TranslationStringDto[]` (one per locale that has a value) | `404` if the key is not in the project |
 | `GET /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}` | - | `200` `TranslationStringDto` | `404` |
 | `PUT /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}` | `UpsertTranslationStringRequest` | `201` `TranslationStringDto` + `Location` when created; `200` when updated | `400` validation; `404` if key or locale not in the project; `409` version mismatch |
+| `GET /api/projects/{projectId:guid}/strings?reviewState=&skip=0&take=50` | - | `200` `PagedResult<TranslationStringDto>` | `400` bad `reviewState`; `404` unknown project |
+
+### Project-wide string list
+
+`GET /api/projects/{projectId:guid}/strings` returns every string in the project
+(across all keys and locales), newest-updated first, as
+`PagedResult<TranslationStringDto>` (`{ items, total }`).
+
+- `reviewState` (optional) filters by exact `ReviewState` name (`Draft`,
+  `NeedsReview`, `Approved`, `Published`). An unknown name - or a numeric value -
+  is `400`. Omitted means all states.
+- `skip` is floored at 0; `take` defaults to 50 and is capped at 200.
+- `404` when the project does not exist. A project with no matching strings is
+  `200` with `{ items: [], total: 0 }`.
+- Scope is the project: strings under other projects' keys are never returned.
+  (The query resolves the project's key ids and matches
+  `translationStrings.translationKeyId` against that set; `TranslationString`
+  is **not** denormalised with a `projectId`.)
 
 Behaviour:
 
@@ -179,48 +197,80 @@ ReviewRequest  { action, reviewedBy }
 
 ---
 
-## Planned endpoints
+## Bundles
 
-Not implemented on the current branch. The domain types, repositories and
-(for audit) the read service exist; the HTTP surface and the bundle-assembly
-service do not. See
-[architecture.md](architecture.md#4-publishing-and-immutable-bundles).
+Immutable, versioned snapshots of a locale's `Published` strings. DTOs:
+`TranslationBundleDto`, `BundleVersionDto`, `PublishBundleRequest`
+(`src/CTMS.Application/Translations`).
 
-### Published bundle delivery
+```
+TranslationBundleDto  { id, projectId, localeCode, version,
+                        entries: { "<keyName>": "<value>" }, etag, createdBy, createdAt }
+BundleVersionDto      { version, etag, createdAt, createdBy, entryCount }
+PublishBundleRequest  { publishedBy? }        // omitted / blank -> "system"
+```
 
-`GET /api/projects/{projectId:guid}/bundles/{locale}`
+`{localeCode}` is the BCP-47 locale **code** (e.g. `fr`, `fr-CA`), matched
+against the project's locales - not a GUID. `etag` is the raw lowercase-hex
+SHA-256 content hash (`TranslationBundle.ComputeETag`); wrap it in double quotes
+to use it as an HTTP entity tag.
 
-- Path `{locale}` is the BCP-47 locale **code** (e.g. `fr-FR`), not a GUID -
-  `TranslationBundle` stores `localeCode`, not a locale id.
-- Returns the latest immutable `TranslationBundle` for `(project, locale)`.
-  Shape (`TranslationBundleDto`):
-  `{ id, projectId, localeCode, version, entries: { "<keyName>": "<value>" }, etag, createdBy, createdAt }`.
-- Sets an `ETag` header = `"` + `dto.etag` + `"` (the DTO carries the raw
-  lowercase-hex SHA-256; see `TranslationBundle.ComputeETag`).
-- Conditional request: a client sending `If-None-Match: "<etag>"` that matches
-  gets `304 Not Modified` with an empty body; otherwise the full `200` body plus
-  the current `ETag`.
-- `404` if the project/locale is unknown or nothing has been published yet.
-- Optional `?version=<n>` -> `GetByVersionAsync` for a historical bundle.
-- A companion publish action (project-level, or
-  `POST .../bundles/{locale}`) snapshots the locale's `Published` strings into a
-  new `TranslationBundle` version and writes a `Published` audit entry.
-  `InsertAsync` yields `409` (`ConflictException`) if that
-  `(projectId, localeCode, version)` already exists.
+| Method & route | Body | Success | Errors |
+|----------------|------|---------|--------|
+| `POST /api/projects/{projectId:guid}/bundles/{localeCode}` | `PublishBundleRequest` (optional) | `201` `TranslationBundleDto` + `Location: .../bundles/{localeCode}/versions/{version}` | `400` blank locale code / nothing published; `404` unknown project or locale; `409` version race |
+| `GET /api/projects/{projectId:guid}/bundles/{localeCode}` | - | `200` `TranslationBundleDto` (latest version) | `404` unknown project/locale, or nothing published yet |
+| `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions` | - | `200` `BundleVersionDto[]` (ascending by `version`, no entries payload) | `404` unknown project/locale |
+| `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions/{version:int}` | - | `200` `TranslationBundleDto` | `404` unknown project/locale/version |
 
-### History / audit trail
+Publish semantics:
 
-`GET /api/projects/{projectId:guid}/history` and/or
-`GET /api/projects/{projectId:guid}/keys/{keyId}/strings/{localeId}/history`
+- Gathers every `TranslationString` for the locale whose `reviewState` is
+  `Published` (strings get there first, one at a time, via the review `publish`
+  action), joins each to its `TranslationKey.keyName`, and freezes the
+  `keyName -> value` map.
+- **Publishing never changes any string's `reviewState`.** It only snapshots.
+  A published string stays `Published` after the bundle is cut.
+- `version` is monotonic per `(projectId, localeCode)`, starting at 1, computed
+  as `latest.version + 1`. Older versions are retained forever.
+- `etag` is derived purely from the entries: two publishes with identical
+  content produce byte-identical `etag`s (only `version`/`id`/`createdAt`
+  differ); any value change changes the `etag`.
+- Publishing with zero `Published` strings is rejected `400` - no empty bundle
+  is created.
+- The `(projectId, localeCode, version)` unique index makes a concurrent publish
+  that grabbed the same next version fail `409` (`ConflictException`).
+- A `Published` `AuditEntry` is written with
+  `entityType = "TranslationBundle"`, `entityId = <bundle id>`,
+  `detail = "{localeCode} v{version}, {n} strings"`.
 
-- Backed by `AuditService`:
-  - `ListByProjectAsync(projectId, skip, take)` -> `PagedResult<AuditEntryDto>`,
-    newest first (`skip` floored at 0; `take` default 50, capped at 200).
-  - `ListByEntityAsync(entityType, entityId)` -> `AuditEntryDto[]`, newest
-    first.
-- `AuditEntryDto`:
-  `{ id, projectId, entityType, entityId, action, actor, timestamp, fromState?, toState?, detail? }`
-  where `action` is an `AuditAction` name (`Created`, `Edited`, `Submitted`,
-  `Approved`, `Rejected`, `Reopened`, `Published`) and `fromState` / `toState`
-  are `ReviewState` names.
-- Append-only; entries are never edited or deleted.
+> **WS4 (not yet built):** `GET .../bundles/{localeCode}` currently returns plain
+> JSON with no caching headers. WS4 adds the `ETag` response header (promoting
+> the `etag` already in the body), `If-None-Match` / `304 Not Modified`
+> handling, and a Redis cache in front of this route. The `versions` and
+> by-version routes stay uncached.
+
+---
+
+## History / audit trail
+
+Read-only projection of the append-only audit log. DTO: `AuditEntryDto`
+(`src/CTMS.Application/Audit`).
+
+```
+AuditEntryDto  { id, projectId, entityType, entityId, action, actor,
+                 timestamp, fromState?, toState?, detail? }
+```
+
+`action` is an `AuditAction` name (`Created`, `Edited`, `Submitted`, `Approved`,
+`Rejected`, `Reopened`, `Published`); `fromState` / `toState` are `ReviewState`
+names when the operation changed review state.
+
+| Method & route | Body / query | Success | Errors |
+|----------------|--------------|---------|--------|
+| `GET /api/projects/{projectId:guid}/history?skip=0&take=50` | `skip` floored at 0; `take` default 50, capped at 200 | `200` `PagedResult<AuditEntryDto>`, newest first | `404` unknown project |
+| `GET /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}/history` | - | `200` `AuditEntryDto[]` for that one string, newest first | `404` if the string does not exist |
+
+- The project feed spans every audited entity in the project (strings and
+  bundles). The per-string feed is `entityType = "TranslationString"` filtered
+  to the string's id.
+- Entries are append-only - never edited or deleted.

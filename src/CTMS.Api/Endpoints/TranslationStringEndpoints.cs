@@ -1,3 +1,4 @@
+using CTMS.Application.Common;
 using CTMS.Application.Translations;
 
 namespace CTMS.Api.Endpoints;
@@ -11,6 +12,28 @@ internal static class TranslationStringEndpoints
         var group = endpoints
             .MapGroup("/api/projects/{projectId:guid}/keys/{keyId:guid}/strings")
             .WithTags("Translation strings");
+
+        // TODO: auth — require an authenticated principal on this group once auth exists
+        // (e.g. projectGroup.RequireAuthorization()).
+        var projectGroup = endpoints
+            .MapGroup("/api/projects/{projectId:guid}/strings")
+            .WithTags("Translation strings");
+
+        projectGroup.MapGet("/", async (
+                Guid projectId,
+                TranslationStringService strings,
+                CancellationToken cancellationToken,
+                string? reviewState = null,
+                int skip = 0,
+                int take = 50) =>
+            {
+                var page = await strings.ListByProjectAsync(projectId, reviewState, skip, take, cancellationToken);
+                return page is null ? Results.NotFound() : Results.Ok(page);
+            })
+            .WithName("ListProjectTranslationStrings")
+            .Produces<PagedResult<TranslationStringDto>>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/", async (
                 Guid projectId,

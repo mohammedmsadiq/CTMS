@@ -25,6 +25,31 @@ public sealed class TranslationStringRepository : ITranslationStringRepository
         CancellationToken cancellationToken = default)
         => await _strings.Find(s => s.LocaleId == localeId && s.ReviewState == state).ToListAsync(cancellationToken);
 
+    public async Task<PagedResult<TranslationString>> ListByKeysAndStateAsync(
+        IReadOnlyCollection<Guid> keyIds,
+        ReviewState? state,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        var builder = Builders<TranslationString>.Filter;
+        var filter = builder.In(s => s.TranslationKeyId, keyIds);
+        if (state is { } wanted)
+        {
+            filter &= builder.Eq(s => s.ReviewState, wanted);
+        }
+
+        var total = (int)await _strings.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
+
+        var items = await _strings.Find(filter)
+            .SortByDescending(s => s.UpdatedAt)
+            .Skip(skip)
+            .Limit(take)
+            .ToListAsync(cancellationToken);
+
+        return new PagedResult<TranslationString>(items, total);
+    }
+
     public async Task AddAsync(TranslationString translationString, CancellationToken cancellationToken = default)
     {
         translationString.Version = 0;

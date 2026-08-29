@@ -30,6 +30,14 @@ public sealed class TranslationBundleRepository : ITranslationBundleRepository
         => await _bundles.Find(b => b.ProjectId == projectId && b.LocaleCode == localeCode && b.Version == version)
             .FirstOrDefaultAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<TranslationBundle>> ListByProjectAndLocaleAsync(
+        Guid projectId,
+        string localeCode,
+        CancellationToken cancellationToken = default)
+        => await _bundles.Find(b => b.ProjectId == projectId && b.LocaleCode == localeCode)
+            .SortBy(b => b.Version)
+            .ToListAsync(cancellationToken);
+
     public async Task InsertAsync(TranslationBundle bundle, CancellationToken cancellationToken = default)
     {
         try

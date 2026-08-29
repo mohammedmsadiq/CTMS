@@ -37,7 +37,8 @@ public sealed class CtmsTestHarness : IDisposable
         ProjectService = new ProjectService(Projects, UnitOfWork);
         LocaleService = new LocaleService(Locales, Projects, UnitOfWork);
         TranslationKeyService = new TranslationKeyService(Keys, Projects, UnitOfWork);
-        TranslationStringService = new TranslationStringService(Strings, Keys, Locales, Audit, UnitOfWork);
+        TranslationStringService = new TranslationStringService(Strings, Keys, Locales, Projects, Audit, UnitOfWork);
+        TranslationBundleService = new TranslationBundleService(Bundles, Strings, Keys, Locales, Projects, Audit, UnitOfWork);
         AuditService = new AuditService(Audit);
     }
 
@@ -64,6 +65,8 @@ public sealed class CtmsTestHarness : IDisposable
     public TranslationKeyService TranslationKeyService { get; }
 
     public TranslationStringService TranslationStringService { get; }
+
+    public TranslationBundleService TranslationBundleService { get; }
 
     public AuditService AuditService { get; }
 

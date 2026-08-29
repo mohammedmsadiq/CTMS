@@ -16,6 +16,17 @@ public interface ITranslationStringRepository
         ReviewState state,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// One page of strings across the given keys (a project's whole key set), optionally filtered
+    /// by <paramref name="state"/>, newest-updated first, together with the total match count.
+    /// </summary>
+    Task<PagedResult<TranslationString>> ListByKeysAndStateAsync(
+        IReadOnlyCollection<Guid> keyIds,
+        ReviewState? state,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
+
     Task AddAsync(TranslationString translationString, CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -15,6 +15,7 @@ public static class DependencyInjection
         services.AddScoped<LocaleService>();
         services.AddScoped<TranslationKeyService>();
         services.AddScoped<TranslationStringService>();
+        services.AddScoped<TranslationBundleService>();
         services.AddScoped<AuditService>();
         return services;
     }

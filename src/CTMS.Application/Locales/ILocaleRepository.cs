@@ -9,6 +9,9 @@ public interface ILocaleRepository
 
     Task<Locale?> GetAsync(Guid projectId, Guid localeId, CancellationToken cancellationToken = default);
 
+    /// <summary>The locale with the given BCP-47 code in a project, or <c>null</c> if there is none.</summary>
+    Task<Locale?> GetByCodeAsync(Guid projectId, string code, CancellationToken cancellationToken = default);
+
     Task<bool> CodeExistsAsync(Guid projectId, string code, CancellationToken cancellationToken = default);
 
     Task AddAsync(Locale locale, CancellationToken cancellationToken = default);

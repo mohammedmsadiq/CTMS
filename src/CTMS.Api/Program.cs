@@ -46,5 +46,7 @@ app.MapLocaleEndpoints();
 app.MapTranslationKeyEndpoints();
 app.MapTranslationStringEndpoints();
 app.MapReviewEndpoints();
+app.MapBundleEndpoints();
+app.MapAuditEndpoints();
 
 app.Run();

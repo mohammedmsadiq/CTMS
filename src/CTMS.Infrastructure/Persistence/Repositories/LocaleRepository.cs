@@ -21,6 +21,10 @@ public sealed class LocaleRepository : ILocaleRepository
         => await _context.Locales.Find(l => l.Id == localeId && l.ProjectId == projectId)
             .FirstOrDefaultAsync(cancellationToken);
 
+    public async Task<Locale?> GetByCodeAsync(Guid projectId, string code, CancellationToken cancellationToken = default)
+        => await _context.Locales.Find(l => l.ProjectId == projectId && l.Code == code)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public Task<bool> CodeExistsAsync(Guid projectId, string code, CancellationToken cancellationToken = default)
         => _context.Locales.Find(l => l.ProjectId == projectId && l.Code == code).AnyAsync(cancellationToken);
 

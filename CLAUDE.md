@@ -75,12 +75,15 @@ Collection names (camelCase BSON elements throughout):
   UpdatedAt, plus a plain incrementing `long Version` optimistic-concurrency token that the
   repository bumps on every stored update and guards with a filtered `ReplaceOne`
   (`Eq(Id) & Eq(Version, expected)`); a zero-match result throws `ConcurrencyException`.
-  Unique `(TranslationKeyId, LocaleId)`.
+  Unique `(TranslationKeyId, LocaleId)`; plus a support index
+  `(TranslationKeyId, ReviewState, UpdatedAt desc)` backing the project-wide string list.
 - `translationBundles` — `TranslationBundle`: Id, ProjectId, LocaleCode, Version (`int`, from 1),
   Entries (immutable key→value snapshot of every published string), ETag (lowercase-hex SHA-256
   of the ordered entries), CreatedBy, CreatedAt. Unique `(ProjectId, LocaleCode, Version)`.
-  Append-only; a new publish creates a new version. HTTP bundle endpoint + Redis/ETag caching
-  are WS4 (`// TODO: WS4` marker in `TranslationBundleRepository`).
+  Append-only; a new publish creates a new version. `TranslationBundleService.PublishAsync`
+  snapshots (never mutates `ReviewState`); the HTTP publish + read endpoints exist (WS3), while
+  Redis/ETag response caching on `GET .../bundles/{localeCode}` is WS4 (`// TODO: WS4` marker in
+  `TranslationBundleRepository`).
 - `auditEntries` — `AuditEntry`: Id, ProjectId, EntityType, EntityId, Action
   (`Created`/`Edited`/`Submitted`/`Approved`/`Rejected`/`Reopened`/`Published`, stored as text),
   Actor, Timestamp, FromState?, ToState?, Detail?. Append-only. Indexes `(ProjectId, Timestamp)`
@@ -179,6 +182,41 @@ Known application/domain exceptions become RFC 7807 ProblemDetails in
   Any other `(from, to)` pair throws `InvalidReviewTransitionException`. A successful
   transition sets `UpdatedBy` to `reviewedBy`, bumps the `long Version`, and appends an
   `AuditEntry`.
+
+**Project-wide string list** (unblocks the Admin UI review queue)
+
+- `GET /api/projects/{projectId:guid}/strings?reviewState=&skip=0&take=50` —
+  `PagedResult<TranslationStringDto>` for every string in the project, newest-updated first.
+  `reviewState` (optional) filters by exact `ReviewState` name; an unknown/numeric value is
+  `400`. `skip` floored at 0, `take` default 50 capped at 200. `404` unknown project. Scoped
+  by matching `translationStrings.translationKeyId` against the project's key ids —
+  `TranslationString` is not denormalised with a `projectId`.
+
+**Bundles** (nested under a project; immutable published snapshots)
+
+- `POST /api/projects/{projectId:guid}/bundles/{localeCode}` — body optional
+  `{ "publishedBy": "..." }` (blank → `"system"`); snapshots the locale's `Published` strings
+  into the next `TranslationBundle` version. `201` `TranslationBundleDto` + `Location` (the
+  by-version route); `400` blank locale code or nothing published; `404` unknown
+  project/locale; `409` on the `(projectId, localeCode, version)` unique-index race.
+  **Publishing never changes a string's `ReviewState`** — strings reach `Published` first via
+  the review `publish` action. Writes a `Published` `AuditEntry` (`entityType =
+  "TranslationBundle"`). `version` is monotonic per `(projectId, localeCode)` from 1; `etag`
+  is a content hash of the entries (stable for identical content).
+- `GET /api/projects/{projectId:guid}/bundles/{localeCode}` — latest `TranslationBundleDto`
+  or `404`. Plain JSON; the `ETag` header / `If-None-Match` / `304` and the Redis cache on
+  this route are **WS4**, still to build (the `etag` value is already in the body).
+- `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions` — `BundleVersionDto[]`
+  (`version`, `etag`, `createdAt`, `createdBy`, `entryCount`), ascending by `version`.
+- `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions/{version:int}` —
+  `TranslationBundleDto` or `404`.
+
+**History / audit trail** (nested under a project)
+
+- `GET /api/projects/{projectId:guid}/history?skip=0&take=50` — `PagedResult<AuditEntryDto>`,
+  newest first (`skip` floored at 0, `take` default 50 capped at 200); `404` unknown project.
+- `GET /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}/history` —
+  `AuditEntryDto[]` for that one string, newest first; `404` if the string does not exist.
 
 ### Tests
 

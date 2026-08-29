@@ -1,6 +1,7 @@
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Locales;
+using CTMS.Application.Projects;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Translations;
 
@@ -11,10 +12,13 @@ public sealed class TranslationStringService
 {
     private const string SystemActor = "system";
     private const string AuditEntityType = "TranslationString";
+    private const int DefaultPageSize = 50;
+    private const int MaxPageSize = 200;
 
     private readonly ITranslationStringRepository _strings;
     private readonly ITranslationKeyRepository _keys;
     private readonly ILocaleRepository _locales;
+    private readonly IProjectRepository _projects;
     private readonly IAuditRepository _audit;
     private readonly IUnitOfWork _unitOfWork;
 
@@ -22,12 +26,14 @@ public sealed class TranslationStringService
         ITranslationStringRepository strings,
         ITranslationKeyRepository keys,
         ILocaleRepository locales,
+        IProjectRepository projects,
         IAuditRepository audit,
         IUnitOfWork unitOfWork)
     {
         _strings = strings;
         _keys = keys;
         _locales = locales;
+        _projects = projects;
         _audit = audit;
         _unitOfWork = unitOfWork;
     }
@@ -73,6 +79,70 @@ public sealed class TranslationStringService
 
         var translationString = await _strings.GetAsync(keyId, localeId, cancellationToken);
         return translationString is null ? null : ToDto(translationString, locale.Code);
+    }
+
+    /// <summary>
+    /// One page of every string in a project, newest-updated first, optionally filtered by review
+    /// state. Returns <c>null</c> when the project is unknown.
+    /// </summary>
+    /// <exception cref="ValidationException"><paramref name="reviewState"/> is not a valid state name.</exception>
+    public async Task<PagedResult<TranslationStringDto>?> ListByProjectAsync(
+        Guid projectId,
+        string? reviewState,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        var stateFilter = ParseReviewState(reviewState);
+
+        if (!await _projects.ExistsAsync(projectId, cancellationToken))
+        {
+            return null;
+        }
+
+        if (skip < 0)
+        {
+            skip = 0;
+        }
+
+        take = take switch
+        {
+            <= 0 => DefaultPageSize,
+            > MaxPageSize => MaxPageSize,
+            _ => take,
+        };
+
+        var keyIds = (await _keys.ListByProjectAsync(projectId, 0, int.MaxValue, cancellationToken))
+            .Select(k => k.Id)
+            .ToList();
+
+        var codeByLocaleId = (await _locales.ListByProjectAsync(projectId, cancellationToken))
+            .ToDictionary(locale => locale.Id, locale => locale.Code);
+
+        var page = await _strings.ListByKeysAndStateAsync(keyIds, stateFilter, skip, take, cancellationToken);
+
+        return new PagedResult<TranslationStringDto>(
+            page.Items.Select(s => ToDto(s, codeByLocaleId.GetValueOrDefault(s.LocaleId, string.Empty))).ToList(),
+            page.Total);
+    }
+
+    private static ReviewState? ParseReviewState(string? reviewState)
+    {
+        if (string.IsNullOrWhiteSpace(reviewState))
+        {
+            return null;
+        }
+
+        var candidate = reviewState.Trim();
+        if (!int.TryParse(candidate, out _)
+            && Enum.TryParse<ReviewState>(candidate, ignoreCase: false, out var parsed)
+            && Enum.IsDefined(parsed))
+        {
+            return parsed;
+        }
+
+        throw new ValidationException(
+            $"'{reviewState}' is not a valid review state. Expected one of: {string.Join(", ", Enum.GetNames<ReviewState>())}.");
     }
 
     public async Task<UpsertTranslationStringResult> UpsertAsync(
