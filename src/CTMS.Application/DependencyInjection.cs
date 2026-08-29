@@ -1,3 +1,4 @@
+using CTMS.Application.Audit;
 using CTMS.Application.Locales;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
@@ -14,6 +15,7 @@ public static class DependencyInjection
         services.AddScoped<LocaleService>();
         services.AddScoped<TranslationKeyService>();
         services.AddScoped<TranslationStringService>();
+        services.AddScoped<AuditService>();
         return services;
     }
 }

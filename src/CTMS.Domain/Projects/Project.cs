@@ -7,7 +7,7 @@ public sealed class Project : Entity
 {
     private Project()
     {
-        // EF Core materialization constructor.
+        // Materialization constructor for the persistence layer.
     }
 
     public Project(string name, string slug, string baseLocaleCode, string? description = null)

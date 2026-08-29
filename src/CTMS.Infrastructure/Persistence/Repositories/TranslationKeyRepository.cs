@@ -1,51 +1,61 @@
+using CTMS.Application.Common;
 using CTMS.Application.Translations;
 using CTMS.Domain.Translations;
-using Microsoft.EntityFrameworkCore;
+using CTMS.Infrastructure.Persistence.Mongo;
+using MongoDB.Driver;
 
 namespace CTMS.Infrastructure.Persistence.Repositories;
 
 public sealed class TranslationKeyRepository : ITranslationKeyRepository
 {
-    private readonly CtmsDbContext _db;
+    private readonly IMongoContext _context;
 
-    public TranslationKeyRepository(CtmsDbContext db) => _db = db;
+    public TranslationKeyRepository(IMongoContext context) => _context = context;
 
     public async Task<IReadOnlyList<TranslationKey>> ListByProjectAsync(
         Guid projectId,
         int skip,
         int take,
         CancellationToken cancellationToken = default)
-        => await _db.TranslationKeys.AsNoTracking()
-            .Where(k => k.ProjectId == projectId)
-            .OrderBy(k => k.KeyName)
+        => await _context.TranslationKeys.Find(k => k.ProjectId == projectId)
+            .SortBy(k => k.KeyName)
             .Skip(skip)
-            .Take(take)
+            .Limit(take)
             .ToListAsync(cancellationToken);
 
-    public Task<int> CountByProjectAsync(Guid projectId, CancellationToken cancellationToken = default)
-        => _db.TranslationKeys.CountAsync(k => k.ProjectId == projectId, cancellationToken);
+    public async Task<int> CountByProjectAsync(Guid projectId, CancellationToken cancellationToken = default)
+        => (int)await _context.TranslationKeys.CountDocumentsAsync(k => k.ProjectId == projectId, cancellationToken: cancellationToken);
 
-    public Task<TranslationKey?> GetAsync(Guid projectId, Guid keyId, CancellationToken cancellationToken = default)
-        => _db.TranslationKeys.FirstOrDefaultAsync(k => k.Id == keyId && k.ProjectId == projectId, cancellationToken);
+    public async Task<TranslationKey?> GetAsync(Guid projectId, Guid keyId, CancellationToken cancellationToken = default)
+        => await _context.TranslationKeys.Find(k => k.Id == keyId && k.ProjectId == projectId)
+            .FirstOrDefaultAsync(cancellationToken);
 
     public Task<bool> KeyNameExistsAsync(Guid projectId, string keyName, CancellationToken cancellationToken = default)
-        => _db.TranslationKeys.AnyAsync(k => k.ProjectId == projectId && k.KeyName == keyName, cancellationToken);
+        => _context.TranslationKeys.Find(k => k.ProjectId == projectId && k.KeyName == keyName).AnyAsync(cancellationToken);
 
-    public Task AddAsync(TranslationKey key, CancellationToken cancellationToken = default)
+    public async Task AddAsync(TranslationKey key, CancellationToken cancellationToken = default)
     {
-        _db.TranslationKeys.Add(key);
-        return Task.CompletedTask;
+        try
+        {
+            await _context.TranslationKeys.InsertOneAsync(key.StampCreated(), cancellationToken: cancellationToken);
+        }
+        catch (MongoWriteException ex) when (ex.IsDuplicateKey())
+        {
+            throw new ConflictException($"A key named '{key.KeyName}' already exists in this project.");
+        }
     }
+
+    public async Task UpdateAsync(TranslationKey key, CancellationToken cancellationToken = default)
+        => await _context.TranslationKeys.ReplaceOneAsync(
+            k => k.Id == key.Id,
+            key.StampUpdated(),
+            new ReplaceOptions(),
+            cancellationToken);
 
     public async Task RemoveAsync(TranslationKey key, CancellationToken cancellationToken = default)
     {
-        // The FK is configured OnDelete(DeleteBehavior.Cascade); delete the dependent strings
-        // explicitly as well so the behaviour holds on providers that do not enforce FKs.
-        var strings = await _db.TranslationStrings
-            .Where(s => s.TranslationKeyId == key.Id)
-            .ToListAsync(cancellationToken);
-
-        _db.TranslationStrings.RemoveRange(strings);
-        _db.TranslationKeys.Remove(key);
+        // Explicitly remove the dependent strings; MongoDB does not enforce foreign keys.
+        await _context.TranslationStrings.DeleteManyAsync(s => s.TranslationKeyId == key.Id, cancellationToken);
+        await _context.TranslationKeys.DeleteOneAsync(k => k.Id == key.Id, cancellationToken);
     }
 }

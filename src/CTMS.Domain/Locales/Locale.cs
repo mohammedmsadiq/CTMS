@@ -7,7 +7,7 @@ public sealed class Locale : Entity
 {
     private Locale()
     {
-        // EF Core materialization constructor.
+        // Materialization constructor for the persistence layer.
     }
 
     public Locale(Guid projectId, string code, string displayName, bool isRtl = false)

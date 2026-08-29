@@ -1,80 +1,64 @@
 using CTMS.Application.Common;
+using CTMS.Application.Tests.Infrastructure;
 using CTMS.Application.Translations;
 using CTMS.Domain.Projects;
-using CTMS.Infrastructure.Persistence;
-using CTMS.Infrastructure.Persistence.Repositories;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 
 namespace CTMS.Application.Tests;
 
+[Collection("mongo")]
 public sealed class TranslationKeyServiceTests : IDisposable
 {
-    private readonly SqliteConnection _connection;
-    private readonly CtmsDbContext _context;
-    private readonly TranslationKeyService _service;
+    private readonly CtmsTestHarness _harness;
     private readonly Guid _projectId;
 
-    public TranslationKeyServiceTests()
+    public TranslationKeyServiceTests(MongoFixture fixture)
     {
-        _connection = new SqliteConnection("Filename=:memory:");
-        _connection.Open();
-
-        var options = new DbContextOptionsBuilder<CtmsDbContext>()
-            .UseSqlite(_connection)
-            .Options;
-
-        _context = new CtmsDbContext(options);
-        _context.Database.EnsureCreated();
+        _harness = new CtmsTestHarness(fixture.ConnectionString);
 
         var project = new Project("Acme Web", "acme-web", "en");
-        _context.Projects.Add(project);
-        _context.SaveChanges();
+        _harness.Projects.AddAsync(project).GetAwaiter().GetResult();
         _projectId = project.Id;
-
-        _service = new TranslationKeyService(
-            new TranslationKeyRepository(_context),
-            new ProjectRepository(_context),
-            _context);
     }
+
+    private TranslationKeyService Service => _harness.TranslationKeyService;
 
     [Fact]
     public async Task CreateAsync_persists_the_key()
     {
-        var created = await _service.CreateAsync(
+        var created = await Service.CreateAsync(
             _projectId,
             new CreateTranslationKeyRequest("checkout.button.submit", "Primary CTA"));
 
         Assert.NotEqual(Guid.Empty, created.Id);
         Assert.Equal("checkout.button.submit", created.KeyName);
 
-        var persisted = await _context.TranslationKeys.AsNoTracking().SingleAsync();
+        var persisted = Assert.Single(await _harness.Keys.ListByProjectAsync(_projectId, 0, 50));
         Assert.Equal("checkout.button.submit", persisted.KeyName);
     }
 
     [Fact]
     public async Task CreateAsync_rejects_a_duplicate_key_name()
     {
-        await _service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home.title"));
+        await Service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home.title"));
 
         await Assert.ThrowsAsync<ConflictException>(
-            () => _service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home.title")));
+            () => Service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home.title")));
 
-        Assert.Equal(1, await _context.TranslationKeys.CountAsync());
+        Assert.Equal(1, await _harness.Keys.CountByProjectAsync(_projectId));
     }
 
     [Fact]
     public async Task CreateAsync_rejects_an_invalid_character_set()
     {
         await Assert.ThrowsAsync<ValidationException>(
-            () => _service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home title!")));
+            () => Service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home title!")));
     }
 
     [Fact]
     public async Task CreateAsync_rejects_an_unknown_project()
     {
         await Assert.ThrowsAsync<NotFoundException>(
-            () => _service.CreateAsync(Guid.NewGuid(), new CreateTranslationKeyRequest("home.title")));
+            () => Service.CreateAsync(Guid.NewGuid(), new CreateTranslationKeyRequest("home.title")));
     }
 
     [Fact]
@@ -82,10 +66,10 @@ public sealed class TranslationKeyServiceTests : IDisposable
     {
         for (var i = 0; i < 5; i++)
         {
-            await _service.CreateAsync(_projectId, new CreateTranslationKeyRequest($"key.{i:D2}"));
+            await Service.CreateAsync(_projectId, new CreateTranslationKeyRequest($"key.{i:D2}"));
         }
 
-        var page = await _service.ListAsync(_projectId, skip: 1, take: 2);
+        var page = await Service.ListAsync(_projectId, skip: 1, take: 2);
 
         Assert.Equal(5, page.Total);
         Assert.Equal(2, page.Items.Count);
@@ -97,18 +81,37 @@ public sealed class TranslationKeyServiceTests : IDisposable
     {
         for (var i = 0; i < 3; i++)
         {
-            await _service.CreateAsync(_projectId, new CreateTranslationKeyRequest($"key.{i:D2}"));
+            await Service.CreateAsync(_projectId, new CreateTranslationKeyRequest($"key.{i:D2}"));
         }
 
-        var page = await _service.ListAsync(_projectId, skip: -10, take: 10_000);
+        var page = await Service.ListAsync(_projectId, skip: -10, take: 10_000);
 
         Assert.Equal(3, page.Total);
         Assert.Equal(3, page.Items.Count);
     }
 
-    public void Dispose()
+    [Fact]
+    public async Task UpdateAsync_persists_the_description()
     {
-        _context.Dispose();
-        _connection.Dispose();
+        var created = await Service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home.title"));
+
+        var updated = await Service.UpdateAsync(
+            _projectId,
+            created.Id,
+            new UpdateTranslationKeyRequest("The landing headline"));
+
+        Assert.Equal("The landing headline", updated!.Description);
+        Assert.Equal("The landing headline", (await Service.GetAsync(_projectId, created.Id))!.Description);
     }
+
+    [Fact]
+    public async Task DeleteAsync_removes_the_key()
+    {
+        var created = await Service.CreateAsync(_projectId, new CreateTranslationKeyRequest("home.title"));
+
+        Assert.True(await Service.DeleteAsync(_projectId, created.Id));
+        Assert.Equal(0, await _harness.Keys.CountByProjectAsync(_projectId));
+    }
+
+    public void Dispose() => _harness.Dispose();
 }

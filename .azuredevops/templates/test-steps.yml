@@ -1,0 +1,69 @@
+# -----------------------------------------------------------------------------
+# Reusable test steps for CTMS.
+#
+# Runs `dotnet test` with Coverlet's "XPlat Code Coverage" collector, then
+# publishes the VSTest .trx results and the Cobertura coverage report so they
+# show up on the pipeline run summary.
+#
+# MongoDB: the test suite uses EphemeralMongo, which starts its own throwaway
+# mongod in-process, so `dotnet test` needs no external database. The calling job
+# still attaches a `mongo:7` service container and passes its connection string
+# through the parameters below, surfaced to the test host as the SAME environment
+# variable names the application reads (double-underscore overrides):
+#     ConnectionStrings__CtmsDatabase   ->  ConnectionStrings:CtmsDatabase
+#     Mongo__Database                   ->  Mongo:Database
+# That makes it a one-line change to point the suite at a real server later; it
+# is harmless while EphemeralMongo is in charge.
+#
+# NOTE: the test project sets <NuGetAudit>false</NuGetAudit> (EphemeralMongo
+# pulls older SharpCompress/Snappier transitively). The solution build keeps
+# auditing on, so `dotnet build` still fails on advisories in shipping code.
+# -----------------------------------------------------------------------------
+parameters:
+  - name: buildConfiguration
+    type: string
+    default: Release
+  - name: solution
+    type: string
+    default: CTMS.sln
+  - name: mongoConnectionString
+    type: string
+    default: mongodb://localhost:27017
+  - name: mongoDatabase
+    type: string
+    default: ctms_ci
+  - name: resultsDirectory
+    type: string
+    default: $(Agent.TempDirectory)/TestResults
+
+steps:
+  - task: DotNetCoreCLI@2
+    displayName: dotnet test (+ XPlat Code Coverage)
+    inputs:
+      command: test
+      projects: ${{ parameters.solution }}
+      arguments: >-
+        -c ${{ parameters.buildConfiguration }}
+        --no-build
+        --logger trx
+        --collect:"XPlat Code Coverage"
+        --results-directory "${{ parameters.resultsDirectory }}"
+    env:
+      ConnectionStrings__CtmsDatabase: ${{ parameters.mongoConnectionString }}
+      Mongo__Database: ${{ parameters.mongoDatabase }}
+
+  - task: PublishTestResults@2
+    displayName: Publish test results (.trx)
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: VSTest
+      testResultsFiles: "${{ parameters.resultsDirectory }}/**/*.trx"
+      mergeTestResults: true
+      failTaskOnFailedTests: true
+
+  - task: PublishCodeCoverageResults@2
+    displayName: Publish code coverage (Cobertura)
+    condition: succeededOrFailed()
+    inputs:
+      summaryFileLocation: "${{ parameters.resultsDirectory }}/**/coverage.cobertura.xml"
+      pathToSources: $(Build.SourcesDirectory)

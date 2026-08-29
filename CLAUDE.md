@@ -12,23 +12,24 @@ All commands run from the repository root.
 
 - Build: `dotnet build CTMS.sln` (warnings are errors — the build must stay clean).
 - Run the API: `dotnet run --project src/CTMS.Api` (Swagger UI at `/swagger` in Development).
-- Test: `dotnet test`
+- Test: `dotnet test` (needs network on first run: `EphemeralMongo` downloads a `mongod`
+  binary and caches it under the local app-data directory).
 - Run a single test: `dotnet test --filter "FullyQualifiedName~ProjectServiceTests.CreateAsync_rejects_a_duplicate_slug"`
   (or `--filter "DisplayName~duplicate slug"`).
-- Restore local tools (first checkout): `dotnet tool restore` (installs `dotnet-ef`).
 
-### EF Core migrations
+### Indexes and seed data (no migrations)
 
-The `dotnet-ef` tool is pinned in `.config/dotnet-tools.json`. Add a migration with:
+MongoDB has no schema migrations. Instead:
 
-```
-dotnet ef migrations add <Name> --project src/CTMS.Infrastructure --startup-project src/CTMS.Api --output-dir Persistence/Migrations
-```
+- **`MongoIndexInitializer`** (`Persistence/Startup`) is an `IHostedService` that calls
+  `EnsureIndexesAsync` on startup, creating every unique/support index (see below). It is
+  idempotent — `createIndexes` is a no-op when the spec already matches.
+- **`DataSeeder`** (`Persistence/Startup`) is an `IHostedService` that inserts one sample
+  project ("Marketing Site") only when the environment is Development **and**
+  `Seed:Enabled` is `true`. It is idempotent (skips if the sample project already exists).
 
-Migrations live in `src/CTMS.Infrastructure/Persistence/Migrations`. `InitialCreate` is the
-baseline. Do not run `dotnet ef database update` here — schema is applied by whoever owns
-the target database. A design-time factory (`CtmsDbContextFactory`) supplies a dummy
-connection string so migration commands never need a live database.
+Both are registered by `AddInfrastructure`. Tests call
+`MongoIndexInitializer.EnsureIndexesAsync` directly against a fresh database.
 
 ## Architecture
 
@@ -44,35 +45,54 @@ CTMS.Api  ──►  CTMS.Application  ──►  CTMS.Domain
   from `Entity` (Guid `Id`, `CreatedAt`, `UpdatedAt`); constructors/methods guard invariants
   and setters are private.
 - **CTMS.Application** — use-case orchestration (`ProjectService`), DTOs (`ProjectDto`,
-  `CreateProjectRequest`), and the ports it needs: `IProjectRepository`, `IUnitOfWork`.
+  `CreateProjectRequest`), and the ports it needs: `IProjectRepository`,
+  `ITranslationBundleRepository`, `IAuditRepository`, `IUnitOfWork`.
   DTOs — never entities — cross the API boundary. `AddApplication()` registers services.
-- **CTMS.Infrastructure** — EF Core. `CtmsDbContext` with one `IEntityTypeConfiguration<T>`
-  per entity under `Persistence/Configurations`, repository implementations under
-  `Persistence/Repositories`, and migrations. `CtmsDbContext` implements `IUnitOfWork` and
-  stamps timestamps in `SaveChanges`. `AddInfrastructure(IConfiguration)` wires the context
-  (Npgsql), the unit of work, and repositories.
+- **CTMS.Infrastructure** — MongoDB (`MongoDB.Driver`). `IMongoContext` / `CtmsMongoContext`
+  wrap `IMongoClient` + `IMongoDatabase` and expose one typed `IMongoCollection<T>` per
+  aggregate. BSON class maps and conventions (camelCase elements, enums-as-strings, standard
+  `Guid` representation) live in `Persistence/Mongo/MongoMappingRegistration`. Repository
+  implementations are under `Persistence/Repositories` and persist each write immediately;
+  `IUnitOfWork` is a `NoOpUnitOfWork` (single-document writes are atomic). Repositories stamp
+  `CreatedAt`/`UpdatedAt` just before writing (`EntityStamps`). `AddInfrastructure(IConfiguration)`
+  registers the client (singleton), the context (singleton), repositories, the readiness
+  health check, and the startup index initializer + data seeder.
 - **CTMS.Api** — ASP.NET Core minimal-API host. Composition root only: it references
   Infrastructure solely to call `AddInfrastructure`. Endpoints are grouped in
   `Endpoints/ProjectEndpoints.cs`; errors become RFC 7807 ProblemDetails via
   `ApplicationExceptionHandler`. There is no auth yet — look for `// TODO: auth` markers in
   `Program.cs` and `ProjectEndpoints.cs`.
 
-### Seed data model
+### Data model
 
-- `Project` — Id, Name, Slug (unique), Description?, BaseLocaleCode, CreatedAt, UpdatedAt.
-- `Locale` — Id, ProjectId, Code (BCP-47), DisplayName, IsRtl. Unique `(ProjectId, Code)`.
-- `TranslationKey` — Id, ProjectId, KeyName (dotted path), Description?. Unique `(ProjectId, KeyName)`.
-- `TranslationString` — Id, TranslationKeyId, LocaleId, Value, ReviewState (`Draft` /
-  `NeedsReview` / `Approved`, stored as text), UpdatedBy, CreatedAt, UpdatedAt, plus a
-  `uint Version` optimistic-concurrency token mapped to PostgreSQL's `xmin` system column.
+Collection names (camelCase BSON elements throughout):
+
+- `projects` — `Project`: Id, Name, Slug (unique), Description?, BaseLocaleCode, CreatedAt, UpdatedAt.
+- `locales` — `Locale`: Id, ProjectId, Code (BCP-47), DisplayName, IsRtl. Unique `(ProjectId, Code)`.
+- `translationKeys` — `TranslationKey`: Id, ProjectId, KeyName (dotted path), Description?. Unique `(ProjectId, KeyName)`.
+- `translationStrings` — `TranslationString`: Id, TranslationKeyId, LocaleId, Value, ReviewState
+  (`Draft` / `NeedsReview` / `Approved` / `Published`, stored as text), UpdatedBy, CreatedAt,
+  UpdatedAt, plus a plain incrementing `long Version` optimistic-concurrency token that the
+  repository bumps on every stored update and guards with a filtered `ReplaceOne`
+  (`Eq(Id) & Eq(Version, expected)`); a zero-match result throws `ConcurrencyException`.
   Unique `(TranslationKeyId, LocaleId)`.
+- `translationBundles` — `TranslationBundle`: Id, ProjectId, LocaleCode, Version (`int`, from 1),
+  Entries (immutable key→value snapshot of every published string), ETag (lowercase-hex SHA-256
+  of the ordered entries), CreatedBy, CreatedAt. Unique `(ProjectId, LocaleCode, Version)`.
+  Append-only; a new publish creates a new version. HTTP bundle endpoint + Redis/ETag caching
+  are WS4 (`// TODO: WS4` marker in `TranslationBundleRepository`).
+- `auditEntries` — `AuditEntry`: Id, ProjectId, EntityType, EntityId, Action
+  (`Created`/`Edited`/`Submitted`/`Approved`/`Rejected`/`Reopened`/`Published`, stored as text),
+  Actor, Timestamp, FromState?, ToState?, Detail?. Append-only. Indexes `(ProjectId, Timestamp)`
+  and `(EntityType, EntityId, Timestamp)`. `TranslationStringService` appends an entry on every
+  upsert and review transition.
 
 ### Persistence
 
-The store is **PostgreSQL** (`Npgsql.EntityFrameworkCore.PostgreSQL`). The connection
-string is configuration key `ConnectionStrings:CtmsDatabase`; override it in any environment
-with `ConnectionStrings__CtmsDatabase`. No credentials are committed — `appsettings.json`
-ships a passwordless localhost placeholder.
+The store is **MongoDB** (`MongoDB.Driver` 3.x). The connection string is configuration key
+`ConnectionStrings:CtmsDatabase` (override with `ConnectionStrings__CtmsDatabase`); the database
+name is configuration key `Mongo:Database`, default `ctms` (override with `Mongo__Database`). No
+credentials are committed — `appsettings.json` ships `mongodb://localhost:27017`.
 
 ### API surface
 
@@ -80,12 +100,14 @@ Each `/api/*` group carries a `// TODO: auth` marker where `RequireAuthorization
 Known application/domain exceptions become RFC 7807 ProblemDetails in
 `ApplicationExceptionHandler`: `ValidationException`→400, `NotFoundException`→404,
 `SlugAlreadyInUseException`/`ConflictException`/`ConcurrencyException`/
-`InvalidReviewTransitionException`→409 (plus EF `DbUpdateConcurrencyException`→409).
+`InvalidReviewTransitionException`→409. `ConcurrencyException` carries
+`extensions.currentVersion` (the stored `long` version).
 
 **Health**
 
 - `GET /health` — liveness (no checks).
-- `GET /health/ready` — readiness; runs an EF Core `CanConnect` check (tag `ready`).
+- `GET /health/ready` — readiness; the `MongoHealthCheck` runs `{ ping: 1 }` against the
+  database (name "database", tag `ready`).
 
 **Projects**
 
@@ -132,14 +154,15 @@ Known application/domain exceptions become RFC 7807 ProblemDetails in
   `expectedVersion`). `201` + `Location` when the row is created, `200` when it is updated;
   `404` if the key or locale is not in the project; `400` on validation. Editing an existing
   string resets `ReviewState` to `NeedsReview` unless it is currently `Draft` (a draft stays a
-  draft). If `expectedVersion` is supplied and does not match the stored `Version`, the
-  response is `409` with `extensions.currentVersion`; an EF `DbUpdateConcurrencyException`
-  maps to the same `409`.
+  draft) — this includes `Approved` and `Published` strings. If `expectedVersion` is supplied
+  and does not match the stored `Version`, the response is `409` with
+  `extensions.currentVersion`; a lost race on the repository's filtered update maps to the
+  same `409`.
 
 **Review workflow**
 
 - `POST /api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}/review` —
-  body `{ "action": "submit" | "approve" | "reject" | "reopen", "reviewedBy": "..." }`;
+  body `{ "action": "submit" | "approve" | "reject" | "reopen" | "publish", "reviewedBy": "..." }`;
   `200` with `TranslationStringDto`, `404` if the string does not exist, `409`
   (`InvalidReviewTransitionException`) for an illegal transition. The transition rules live on
   the `TranslationString.ChangeReviewState` domain method:
@@ -150,12 +173,19 @@ Known application/domain exceptions become RFC 7807 ProblemDetails in
   | approve | NeedsReview | Approved    |
   | reject  | NeedsReview | Draft       |
   | reopen  | Approved    | NeedsReview |
+  | publish | Approved    | Published   |
+  | reopen  | Published   | NeedsReview |
 
   Any other `(from, to)` pair throws `InvalidReviewTransitionException`. A successful
-  transition sets `UpdatedBy` to `reviewedBy`; PostgreSQL's `xmin` advances the `Version`.
+  transition sets `UpdatedBy` to `reviewedBy`, bumps the `long Version`, and appends an
+  `AuditEntry`.
 
 ### Tests
 
-`tests/CTMS.Application.Tests` (xUnit) exercises the application services against a real
-`CtmsDbContext` on SQLite in-memory (a kept-open `:memory:` connection per test class), plus
-`ReviewWorkflowTests` which drives the `TranslationString` review transitions directly.
+`tests/CTMS.Application.Tests` (xUnit) exercises the application services and repositories
+against a real MongoDB. `EphemeralMongo` starts one throwaway `mongod` for the whole run
+(shared via `[Collection("mongo")]` / `MongoFixture`); each test gets an isolated database
+with every production index applied, wired through `CtmsTestHarness`, and dropped on dispose.
+`ReviewWorkflowTests` drives the `TranslationString` review transitions directly (no
+database). First run needs network access so `EphemeralMongo` can download and cache a
+`mongod` binary.

@@ -93,6 +93,7 @@ public sealed class LocaleService
             locale.SetRightToLeft(isRtl);
         }
 
+        await _locales.UpdateAsync(locale, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(locale);

@@ -1,42 +1,52 @@
+using CTMS.Application.Common;
 using CTMS.Application.Locales;
 using CTMS.Domain.Locales;
-using Microsoft.EntityFrameworkCore;
+using CTMS.Infrastructure.Persistence.Mongo;
+using MongoDB.Driver;
 
 namespace CTMS.Infrastructure.Persistence.Repositories;
 
 public sealed class LocaleRepository : ILocaleRepository
 {
-    private readonly CtmsDbContext _db;
+    private readonly IMongoContext _context;
 
-    public LocaleRepository(CtmsDbContext db) => _db = db;
+    public LocaleRepository(IMongoContext context) => _context = context;
 
     public async Task<IReadOnlyList<Locale>> ListByProjectAsync(Guid projectId, CancellationToken cancellationToken = default)
-        => await _db.Locales.AsNoTracking()
-            .Where(l => l.ProjectId == projectId)
-            .OrderBy(l => l.Code)
+        => await _context.Locales.Find(l => l.ProjectId == projectId)
+            .SortBy(l => l.Code)
             .ToListAsync(cancellationToken);
 
-    public Task<Locale?> GetAsync(Guid projectId, Guid localeId, CancellationToken cancellationToken = default)
-        => _db.Locales.FirstOrDefaultAsync(l => l.Id == localeId && l.ProjectId == projectId, cancellationToken);
+    public async Task<Locale?> GetAsync(Guid projectId, Guid localeId, CancellationToken cancellationToken = default)
+        => await _context.Locales.Find(l => l.Id == localeId && l.ProjectId == projectId)
+            .FirstOrDefaultAsync(cancellationToken);
 
     public Task<bool> CodeExistsAsync(Guid projectId, string code, CancellationToken cancellationToken = default)
-        => _db.Locales.AnyAsync(l => l.ProjectId == projectId && l.Code == code, cancellationToken);
+        => _context.Locales.Find(l => l.ProjectId == projectId && l.Code == code).AnyAsync(cancellationToken);
 
-    public Task AddAsync(Locale locale, CancellationToken cancellationToken = default)
+    public async Task AddAsync(Locale locale, CancellationToken cancellationToken = default)
     {
-        _db.Locales.Add(locale);
-        return Task.CompletedTask;
+        try
+        {
+            await _context.Locales.InsertOneAsync(locale.StampCreated(), cancellationToken: cancellationToken);
+        }
+        catch (MongoWriteException ex) when (ex.IsDuplicateKey())
+        {
+            throw new ConflictException($"A locale with the code '{locale.Code}' already exists in this project.");
+        }
     }
+
+    public async Task UpdateAsync(Locale locale, CancellationToken cancellationToken = default)
+        => await _context.Locales.ReplaceOneAsync(
+            l => l.Id == locale.Id,
+            locale.StampUpdated(),
+            new ReplaceOptions(),
+            cancellationToken);
 
     public async Task RemoveAsync(Locale locale, CancellationToken cancellationToken = default)
     {
-        // The FK is configured OnDelete(DeleteBehavior.Cascade); delete the dependent strings
-        // explicitly as well so the behaviour holds on providers that do not enforce FKs.
-        var strings = await _db.TranslationStrings
-            .Where(s => s.LocaleId == locale.Id)
-            .ToListAsync(cancellationToken);
-
-        _db.TranslationStrings.RemoveRange(strings);
-        _db.Locales.Remove(locale);
+        // Explicitly remove the dependent strings; MongoDB does not enforce foreign keys.
+        await _context.TranslationStrings.DeleteManyAsync(s => s.LocaleId == locale.Id, cancellationToken);
+        await _context.Locales.DeleteOneAsync(l => l.Id == locale.Id, cancellationToken);
     }
 }

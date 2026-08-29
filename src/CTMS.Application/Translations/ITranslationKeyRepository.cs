@@ -19,6 +19,9 @@ public interface ITranslationKeyRepository
 
     Task AddAsync(TranslationKey key, CancellationToken cancellationToken = default);
 
+    /// <summary>Persists changes to an already-stored key.</summary>
+    Task UpdateAsync(TranslationKey key, CancellationToken cancellationToken = default);
+
     /// <summary>Removes the key and every translation string that belongs to it.</summary>
     Task RemoveAsync(TranslationKey key, CancellationToken cancellationToken = default);
 }

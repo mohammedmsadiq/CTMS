@@ -1,5 +1,7 @@
+using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Locales;
+using CTMS.Domain.Audit;
 using CTMS.Domain.Translations;
 
 namespace CTMS.Application.Translations;
@@ -8,21 +10,25 @@ namespace CTMS.Application.Translations;
 public sealed class TranslationStringService
 {
     private const string SystemActor = "system";
+    private const string AuditEntityType = "TranslationString";
 
     private readonly ITranslationStringRepository _strings;
     private readonly ITranslationKeyRepository _keys;
     private readonly ILocaleRepository _locales;
+    private readonly IAuditRepository _audit;
     private readonly IUnitOfWork _unitOfWork;
 
     public TranslationStringService(
         ITranslationStringRepository strings,
         ITranslationKeyRepository keys,
         ILocaleRepository locales,
+        IAuditRepository audit,
         IUnitOfWork unitOfWork)
     {
         _strings = strings;
         _keys = keys;
         _locales = locales;
+        _audit = audit;
         _unitOfWork = unitOfWork;
     }
 
@@ -96,6 +102,15 @@ public sealed class TranslationStringService
         {
             var created = new TranslationString(key.Id, locale.Id, request.Value, actor);
             await _strings.AddAsync(created, cancellationToken);
+            await _audit.AppendAsync(
+                new AuditEntry(
+                    projectId,
+                    AuditEntityType,
+                    created.Id,
+                    AuditAction.Created,
+                    actor,
+                    toState: created.ReviewState),
+                cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return new UpsertTranslationStringResult(ToDto(created, locale.Code), Created: true);
@@ -106,7 +121,19 @@ public sealed class TranslationStringService
             throw new ConcurrencyException(existing.Version);
         }
 
+        var fromState = existing.ReviewState;
         existing.Edit(request.Value, actor);
+        await _strings.UpdateAsync(existing, cancellationToken);
+        await _audit.AppendAsync(
+            new AuditEntry(
+                projectId,
+                AuditEntityType,
+                existing.Id,
+                AuditAction.Edited,
+                actor,
+                fromState,
+                existing.ReviewState),
+            cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return new UpsertTranslationStringResult(ToDto(existing, locale.Code), Created: false);
@@ -125,7 +152,7 @@ public sealed class TranslationStringService
             throw new ValidationException("A reviewer is required.");
         }
 
-        var target = ToTargetState(action);
+        var (target, auditAction) = ResolveReviewAction(action);
 
         var key = await _keys.GetAsync(projectId, keyId, cancellationToken);
         if (key is null)
@@ -145,21 +172,35 @@ public sealed class TranslationStringService
             return null;
         }
 
+        var fromState = translationString.ReviewState;
         translationString.ChangeReviewState(target, reviewedBy);
+        await _strings.UpdateAsync(translationString, cancellationToken);
+        await _audit.AppendAsync(
+            new AuditEntry(
+                projectId,
+                AuditEntityType,
+                translationString.Id,
+                auditAction,
+                reviewedBy,
+                fromState,
+                translationString.ReviewState),
+            cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(translationString, locale.Code);
     }
 
-    private static ReviewState ToTargetState(string action) => action?.Trim().ToLowerInvariant() switch
-    {
-        "submit" => ReviewState.NeedsReview,
-        "approve" => ReviewState.Approved,
-        "reject" => ReviewState.Draft,
-        "reopen" => ReviewState.NeedsReview,
-        _ => throw new ValidationException(
-            $"Unknown review action '{action}'. Expected 'submit', 'approve', 'reject' or 'reopen'."),
-    };
+    private static (ReviewState Target, AuditAction Audit) ResolveReviewAction(string action) =>
+        action?.Trim().ToLowerInvariant() switch
+        {
+            "submit" => (ReviewState.NeedsReview, AuditAction.Submitted),
+            "approve" => (ReviewState.Approved, AuditAction.Approved),
+            "reject" => (ReviewState.Draft, AuditAction.Rejected),
+            "reopen" => (ReviewState.NeedsReview, AuditAction.Reopened),
+            "publish" => (ReviewState.Published, AuditAction.Published),
+            _ => throw new ValidationException(
+                $"Unknown review action '{action}'. Expected 'submit', 'approve', 'reject', 'reopen' or 'publish'."),
+        };
 
     private static TranslationStringDto ToDto(TranslationString s, string localeCode) => new(
         s.Id,

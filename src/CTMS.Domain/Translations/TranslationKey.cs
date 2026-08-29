@@ -7,7 +7,7 @@ public sealed class TranslationKey : Entity
 {
     private TranslationKey()
     {
-        // EF Core materialization constructor.
+        // Materialization constructor for the persistence layer.
     }
 
     public TranslationKey(Guid projectId, string keyName, string? description = null)

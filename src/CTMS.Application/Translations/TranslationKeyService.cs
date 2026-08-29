@@ -107,6 +107,7 @@ public sealed class TranslationKeyService
 
         key.Describe(request.Description);
 
+        await _keys.UpdateAsync(key, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(key);

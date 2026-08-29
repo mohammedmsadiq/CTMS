@@ -43,9 +43,9 @@ public sealed class ConflictException : Exception
 /// </summary>
 public sealed class ConcurrencyException : Exception
 {
-    public ConcurrencyException(uint currentVersion)
+    public ConcurrencyException(long currentVersion)
         : base("The translation string was changed by someone else; reload and retry.")
         => CurrentVersion = currentVersion;
 
-    public uint CurrentVersion { get; }
+    public long CurrentVersion { get; }
 }

@@ -2,7 +2,6 @@ using CTMS.Api.Endpoints;
 using CTMS.Api.Infrastructure;
 using CTMS.Application;
 using CTMS.Infrastructure;
-using CTMS.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,8 +15,7 @@ builder.Services.AddExceptionHandler<ApplicationExceptionHandler>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddHealthChecks()
-    .AddDbContextCheck<CtmsDbContext>(name: "database", tags: ["ready"]);
+// The MongoDB readiness check (name "database", tag "ready") is registered by AddInfrastructure.
 
 var app = builder.Build();
 

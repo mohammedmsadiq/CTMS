@@ -7,7 +7,7 @@ public sealed class TranslationString : Entity
 {
     private TranslationString()
     {
-        // EF Core materialization constructor.
+        // Materialization constructor for the persistence layer.
     }
 
     public TranslationString(Guid translationKeyId, Guid localeId, string value, string updatedBy)
@@ -43,10 +43,12 @@ public sealed class TranslationString : Entity
     public string UpdatedBy { get; private set; } = string.Empty;
 
     /// <summary>
-    /// Optimistic-concurrency token. Mapped to PostgreSQL's <c>xmin</c> system column so
-    /// that concurrent edits to the same string are detected when saving.
+    /// Optimistic-concurrency token. A plain incrementing counter that the persistence layer
+    /// bumps on every stored update and guards with a filtered write, so concurrent edits to
+    /// the same string are detected. The setter is <c>internal</c> so only the infrastructure
+    /// assembly can advance it.
     /// </summary>
-    public uint Version { get; private set; }
+    public long Version { get; internal set; }
 
     public void Edit(string value, string editedBy)
     {
@@ -56,7 +58,8 @@ public sealed class TranslationString : Entity
         Value = value;
         UpdatedBy = editedBy.Trim();
 
-        // Editing published content sends it back for review; a draft stays a draft.
+        // Editing content that has left Draft (NeedsReview, Approved or Published) sends it
+        // back for review; a draft stays a draft.
         if (ReviewState != ReviewState.Draft)
         {
             ReviewState = ReviewState.NeedsReview;
@@ -66,7 +69,8 @@ public sealed class TranslationString : Entity
     /// <summary>
     /// Applies a review-workflow transition. Legal moves are
     /// Draft→NeedsReview (submit), NeedsReview→Approved (approve),
-    /// NeedsReview→Draft (reject) and Approved→NeedsReview (reopen); anything else throws
+    /// NeedsReview→Draft (reject), Approved→NeedsReview (reopen),
+    /// Approved→Published (publish) and Published→NeedsReview (reopen); anything else throws
     /// <see cref="InvalidReviewTransitionException"/>.
     /// </summary>
     public void ChangeReviewState(ReviewState target, string reviewedBy)
@@ -79,6 +83,8 @@ public sealed class TranslationString : Entity
             (ReviewState.NeedsReview, ReviewState.Approved) => true,
             (ReviewState.NeedsReview, ReviewState.Draft) => true,
             (ReviewState.Approved, ReviewState.NeedsReview) => true,
+            (ReviewState.Approved, ReviewState.Published) => true,
+            (ReviewState.Published, ReviewState.NeedsReview) => true,
             _ => false,
         };
 

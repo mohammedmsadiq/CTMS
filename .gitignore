@@ -10,6 +10,11 @@
 *.userosscache
 *.sln.docstates
 *.env
+.env
+!.env.example
+
+# Local Docker Compose overrides (see docker-compose.override.yml.example)
+docker-compose.override.yml
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

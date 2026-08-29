@@ -2,7 +2,6 @@ using CTMS.Application.Common;
 using CTMS.Domain.Translations;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace CTMS.Api.Infrastructure;
 
@@ -27,7 +26,6 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
             ConflictException => (StatusCodes.Status409Conflict, "Conflict"),
             ConcurrencyException => (StatusCodes.Status409Conflict, "Concurrency conflict"),
             InvalidReviewTransitionException => (StatusCodes.Status409Conflict, "Invalid review transition"),
-            DbUpdateConcurrencyException => (StatusCodes.Status409Conflict, "Concurrency conflict"),
             _ => (0, string.Empty),
         };
 
@@ -45,16 +43,9 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
             Detail = exception.Message,
         };
 
-        switch (exception)
+        if (exception is ConcurrencyException concurrency)
         {
-            case ConcurrencyException concurrency:
-                problemDetails.Extensions["currentVersion"] = concurrency.CurrentVersion;
-                break;
-            case DbUpdateConcurrencyException dbConcurrency when TryReadCurrentVersion(dbConcurrency) is { } current:
-                problemDetails.Extensions["currentVersion"] = current;
-                break;
-            default:
-                break;
+            problemDetails.Extensions["currentVersion"] = concurrency.CurrentVersion;
         }
 
         return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
@@ -62,18 +53,5 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
             HttpContext = httpContext,
             ProblemDetails = problemDetails,
         });
-    }
-
-    private static uint? TryReadCurrentVersion(DbUpdateConcurrencyException exception)
-    {
-        var entry = exception.Entries.FirstOrDefault();
-        var databaseValues = entry?.GetDatabaseValues();
-        if (databaseValues is null)
-        {
-            return null;
-        }
-
-        var hasVersion = databaseValues.Properties.Any(p => p.Name == nameof(TranslationString.Version));
-        return hasVersion ? databaseValues.GetValue<uint>(nameof(TranslationString.Version)) : null;
     }
 }

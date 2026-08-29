@@ -1,0 +1,44 @@
+# Build output
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# Test results / coverage
+**/TestResults/
+**/coverage/
+*.trx
+*.coverage
+
+# VCS / editor / tooling metadata
+.git/
+.gitignore
+.gitattributes
+.vs/
+.vscode/
+.idea/
+.claude/
+*.user
+*.suo
+*.DS_Store
+
+# Local-only configuration and secrets — never bake into the image
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/*.local.json
+.env
+.env.*
+!.env.example
+
+# Docker / compose files themselves
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+docker-compose*.yml.example
+
+# Docs and deployment IaC (not needed by the build)
+docs/
+deploy/
+*.md
+!README.md
+LICENSE

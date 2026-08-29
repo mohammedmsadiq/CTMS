@@ -9,7 +9,7 @@ public sealed record TranslationStringDto(
     string Value,
     string ReviewState,
     string? UpdatedBy,
-    uint Version,
+    long Version,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
@@ -20,7 +20,7 @@ public sealed record TranslationStringDto(
 public sealed record UpsertTranslationStringRequest(
     string Value,
     string? UpdatedBy = null,
-    uint? ExpectedVersion = null);
+    long? ExpectedVersion = null);
 
 /// <summary>Outcome of an upsert: the resulting string plus whether a new row was created.</summary>
 public sealed record UpsertTranslationStringResult(TranslationStringDto String, bool Created);
