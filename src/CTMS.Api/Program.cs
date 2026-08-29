@@ -28,7 +28,15 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// UseHttpsRedirection logs "Failed to determine the https port for redirect" on every request
+// when it can find no HTTPS port to redirect to. The container listens HTTP-only on :8080 (TLS
+// terminates upstream), and a bare `dotnet run` without launchSettings has no https URL either.
+// Only enable the middleware when an HTTPS port/URL is actually configured; real deployments
+// that set one keep the redirect.
+if (HttpsRedirectConfigured(builder.Configuration))
+{
+    app.UseHttpsRedirection();
+}
 
 // TODO: auth — add authentication/authorization here. Expected: JWT bearer.
 // Register the scheme(s) above with builder.Services.AddAuthentication(...).AddJwtBearer(...)
@@ -50,3 +58,20 @@ app.MapBundleEndpoints();
 app.MapAuditEndpoints();
 
 app.Run();
+
+// True when an HTTPS endpoint is configured for this host, via the `https_port` config key,
+// the `HTTPS_PORTS` / `ASPNETCORE_HTTPS_PORTS` variables, the `ASPNETCORE_HTTPS_PORT` env var
+// that UseHttpsRedirection itself reads, or an `https://` entry in the configured URLs.
+static bool HttpsRedirectConfigured(IConfiguration config)
+{
+    if (!string.IsNullOrEmpty(config["https_port"])
+        || !string.IsNullOrEmpty(config["HTTPS_PORTS"])
+        || !string.IsNullOrEmpty(config["ASPNETCORE_HTTPS_PORTS"])
+        || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ASPNETCORE_HTTPS_PORT")))
+    {
+        return true;
+    }
+
+    var urls = config["ASPNETCORE_URLS"] ?? config["urls"];
+    return urls is not null && urls.Contains("https://", StringComparison.OrdinalIgnoreCase);
+}

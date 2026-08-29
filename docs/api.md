@@ -218,7 +218,7 @@ to use it as an HTTP entity tag.
 | Method & route | Body | Success | Errors |
 |----------------|------|---------|--------|
 | `POST /api/projects/{projectId:guid}/bundles/{localeCode}` | `PublishBundleRequest` (optional) | `201` `TranslationBundleDto` + `Location: .../bundles/{localeCode}/versions/{version}` | `400` blank locale code / nothing published; `404` unknown project or locale; `409` version race |
-| `GET /api/projects/{projectId:guid}/bundles/{localeCode}` | - | `200` `TranslationBundleDto` (latest version) | `404` unknown project/locale, or nothing published yet |
+| `GET /api/projects/{projectId:guid}/bundles/{localeCode}` | `If-None-Match` (optional) | `200` `TranslationBundleDto` (latest version) + `ETag` + `Cache-Control: no-cache`; `304 Not Modified` (no body, `ETag` still set) when `If-None-Match` matches | `404` unknown project/locale, or nothing published yet |
 | `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions` | - | `200` `BundleVersionDto[]` (ascending by `version`, no entries payload) | `404` unknown project/locale |
 | `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions/{version:int}` | - | `200` `TranslationBundleDto` | `404` unknown project/locale/version |
 
@@ -243,11 +243,31 @@ Publish semantics:
   `entityType = "TranslationBundle"`, `entityId = <bundle id>`,
   `detail = "{localeCode} v{version}, {n} strings"`.
 
-> **WS4 (not yet built):** `GET .../bundles/{localeCode}` currently returns plain
-> JSON with no caching headers. WS4 adds the `ETag` response header (promoting
-> the `etag` already in the body), `If-None-Match` / `304 Not Modified`
-> handling, and a Redis cache in front of this route. The `versions` and
-> by-version routes stay uncached.
+### Conditional GET on the latest bundle
+
+`GET .../bundles/{localeCode}` is an HTTP conditional GET:
+
+- **`ETag`** — every `200` (and every `304`) carries `ETag: "<etag>"`, the body's
+  raw lowercase-hex `etag` wrapped in double quotes (a strong validator).
+- **`Cache-Control: no-cache`** — clients (and shared caches) may store the
+  response but must revalidate before reuse; a stored copy is still allowed to be
+  sent back as an `If-None-Match` conditional request.
+- **`If-None-Match`** — if the request header contains a matching entity-tag the
+  response is `304 Not Modified` with no body and the `ETag` still set; otherwise
+  it is `200` with the full body. Matching accepts the quoted form
+  (`"<etag>"`), an optional weak prefix (`W/"<etag>"`), a comma-separated list,
+  the header repeated across multiple values, and `*` (matches whenever a bundle
+  exists).
+
+A **Redis** cache fronts this route (`ctms:bundle:{projectId}:{localeCode}:latest`,
+locale code lower-cased; TTL `Cache:BundleTtlMinutes`, default 60). A cache hit
+serves the `ETag` / `304` decision and the body without touching MongoDB;
+publishing a new version invalidates the key. When `ConnectionStrings:Redis` is
+unset (e.g. a local `dotnet run`) an in-process distributed-memory cache is used
+instead, so the route behaves identically without Redis.
+
+The `versions` and by-version routes stay uncached and unconditioned (a
+by-version bundle is immutable, but WS4 is scoped to the latest route).
 
 ---
 

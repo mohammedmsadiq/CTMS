@@ -6,8 +6,9 @@ using MongoDB.Driver;
 
 namespace CTMS.Infrastructure.Persistence.Repositories;
 
-// TODO: WS4 — the HTTP bundle endpoint (GET latest / by-version) and its Redis + ETag
-// response caching wire onto this repository. This class only provides storage + retrieval.
+// Storage + retrieval only. The read-through cache and the ETag / If-None-Match / 304 handling
+// on GET latest live in BundleCache (Persistence/Caching), TranslationBundleService, and
+// BundleEndpoints respectively.
 public sealed class TranslationBundleRepository : ITranslationBundleRepository
 {
     private readonly IMongoCollection<TranslationBundle> _bundles;

@@ -3,12 +3,14 @@ using CTMS.Application.Common;
 using CTMS.Application.Locales;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
+using CTMS.Infrastructure.Persistence.Caching;
 using CTMS.Infrastructure.Persistence.Health;
 using CTMS.Infrastructure.Persistence.Mongo;
 using CTMS.Infrastructure.Persistence.Repositories;
 using CTMS.Infrastructure.Persistence.Startup;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 
 namespace CTMS.Infrastructure;
@@ -17,6 +19,13 @@ public static class DependencyInjection
 {
     /// <summary>Name of the MongoDB connection string in configuration.</summary>
     public const string ConnectionStringName = "CtmsDatabase";
+
+    /// <summary>
+    /// Name of the Redis connection string in configuration (StackExchange.Redis format
+    /// <c>host:port[,options]</c>). When absent, the bundle cache falls back to an in-process
+    /// distributed-memory cache so a local <c>dotnet run</c> needs no Redis.
+    /// </summary>
+    public const string RedisConnectionStringName = "Redis";
 
     /// <summary>
     /// Wires the MongoDB client and context, the (no-op) unit of work, repository
@@ -53,9 +62,40 @@ public static class DependencyInjection
         services.AddHealthChecks()
             .AddCheck<MongoHealthCheck>("database", tags: ["ready"]);
 
+        AddBundleCache(services, configuration);
+
         services.AddHostedService<MongoIndexInitializer>();
         services.AddHostedService<DataSeeder>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers the distributed cache that fronts <c>GET .../bundles/{localeCode}</c>:
+    /// StackExchange.Redis when <c>ConnectionStrings:Redis</c> is set, otherwise an in-process
+    /// distributed-memory cache. The active backend is logged once at startup by
+    /// <see cref="CacheModeLogger"/>.
+    /// </summary>
+    private static void AddBundleCache(IServiceCollection services, IConfiguration configuration)
+    {
+        var redisConnectionString = configuration.GetConnectionString(RedisConnectionStringName);
+        var usingRedis = !string.IsNullOrWhiteSpace(redisConnectionString);
+
+        if (usingRedis)
+        {
+            services.AddStackExchangeRedisCache(options => options.Configuration = redisConnectionString);
+        }
+        else
+        {
+            services.AddDistributedMemoryCache();
+        }
+
+        services.Configure<BundleCacheOptions>(options => options.BundleTtlMinutes =
+            configuration.GetValue(
+                $"{BundleCacheOptions.SectionName}:BundleTtlMinutes",
+                BundleCacheOptions.DefaultTtlMinutes));
+        services.AddSingleton<IBundleCache, BundleCache>();
+        services.AddHostedService(provider =>
+            new CacheModeLogger(provider.GetRequiredService<ILogger<CacheModeLogger>>(), usingRedis));
     }
 }

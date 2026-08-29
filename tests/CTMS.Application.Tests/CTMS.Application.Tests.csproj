@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\CTMS.Api\CTMS.Api.csproj" />
     <ProjectReference Include="..\..\src\CTMS.Application\CTMS.Application.csproj" />
     <ProjectReference Include="..\..\src\CTMS.Infrastructure\CTMS.Infrastructure.csproj" />
   </ItemGroup>

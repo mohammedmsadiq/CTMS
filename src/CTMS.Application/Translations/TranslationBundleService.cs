@@ -24,6 +24,7 @@ public sealed class TranslationBundleService
     private readonly ILocaleRepository _locales;
     private readonly IProjectRepository _projects;
     private readonly IAuditRepository _audit;
+    private readonly IBundleCache _cache;
     private readonly IUnitOfWork _unitOfWork;
 
     public TranslationBundleService(
@@ -33,6 +34,7 @@ public sealed class TranslationBundleService
         ILocaleRepository locales,
         IProjectRepository projects,
         IAuditRepository audit,
+        IBundleCache cache,
         IUnitOfWork unitOfWork)
     {
         _bundles = bundles;
@@ -41,6 +43,7 @@ public sealed class TranslationBundleService
         _locales = locales;
         _projects = projects;
         _audit = audit;
+        _cache = cache;
         _unitOfWork = unitOfWork;
     }
 
@@ -104,15 +107,34 @@ public sealed class TranslationBundleService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        // A newer version is now the latest; drop the cached entry so the next read repopulates.
+        await _cache.InvalidateAsync(projectId, locale.Code, cancellationToken);
+
         return ToDto(bundle);
     }
 
-    /// <summary>The latest bundle for a project's locale, or <c>null</c> if none has been published.</summary>
+    /// <summary>
+    /// The latest bundle for a project's locale, or <c>null</c> if none has been published.
+    /// Served read-through from <see cref="IBundleCache"/>: a hit skips MongoDB entirely (so a
+    /// conditional <c>If-None-Match</c> / <c>304</c> costs no database round-trip); a miss loads
+    /// from the repository and primes the cache.
+    /// </summary>
     public async Task<TranslationBundleDto?> GetLatestAsync(
         Guid projectId,
         string localeCode,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(localeCode))
+        {
+            return null;
+        }
+
+        var cached = await _cache.GetLatestAsync(projectId, localeCode, cancellationToken);
+        if (cached is not null)
+        {
+            return cached;
+        }
+
         var locale = await ResolveLocaleAsync(projectId, localeCode, cancellationToken);
         if (locale is null)
         {
@@ -120,7 +142,14 @@ public sealed class TranslationBundleService
         }
 
         var bundle = await _bundles.GetLatestAsync(projectId, locale.Code, cancellationToken);
-        return bundle is null ? null : ToDto(bundle);
+        if (bundle is null)
+        {
+            return null;
+        }
+
+        var dto = ToDto(bundle);
+        await _cache.SetLatestAsync(projectId, locale.Code, dto, cancellationToken);
+        return dto;
     }
 
     /// <summary>A specific bundle version, or <c>null</c> if the project, locale, or version is unknown.</summary>

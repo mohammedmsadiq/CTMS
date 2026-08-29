@@ -56,7 +56,8 @@ CTMS.Api  ──►  CTMS.Application  ──►  CTMS.Domain
   `IUnitOfWork` is a `NoOpUnitOfWork` (single-document writes are atomic). Repositories stamp
   `CreatedAt`/`UpdatedAt` just before writing (`EntityStamps`). `AddInfrastructure(IConfiguration)`
   registers the client (singleton), the context (singleton), repositories, the readiness
-  health check, and the startup index initializer + data seeder.
+  health check, the bundle cache (Redis or in-memory fallback — see below), and the startup
+  index initializer + data seeder.
 - **CTMS.Api** — ASP.NET Core minimal-API host. Composition root only: it references
   Infrastructure solely to call `AddInfrastructure`. Endpoints are grouped in
   `Endpoints/ProjectEndpoints.cs`; errors become RFC 7807 ProblemDetails via
@@ -81,9 +82,10 @@ Collection names (camelCase BSON elements throughout):
   Entries (immutable key→value snapshot of every published string), ETag (lowercase-hex SHA-256
   of the ordered entries), CreatedBy, CreatedAt. Unique `(ProjectId, LocaleCode, Version)`.
   Append-only; a new publish creates a new version. `TranslationBundleService.PublishAsync`
-  snapshots (never mutates `ReviewState`); the HTTP publish + read endpoints exist (WS3), while
-  Redis/ETag response caching on `GET .../bundles/{localeCode}` is WS4 (`// TODO: WS4` marker in
-  `TranslationBundleRepository`).
+  snapshots (never mutates `ReviewState`). `GET .../bundles/{localeCode}` (latest) is a
+  conditional GET — strong `ETag`, `If-None-Match`/`304`, `Cache-Control: no-cache` — fronted
+  by a read-through distributed cache (`IBundleCache`); `PublishAsync` invalidates it. The
+  `versions` / by-version routes stay uncached.
 - `auditEntries` — `AuditEntry`: Id, ProjectId, EntityType, EntityId, Action
   (`Created`/`Edited`/`Submitted`/`Approved`/`Rejected`/`Reopened`/`Published`, stored as text),
   Actor, Timestamp, FromState?, ToState?, Detail?. Append-only. Indexes `(ProjectId, Timestamp)`
@@ -96,6 +98,18 @@ The store is **MongoDB** (`MongoDB.Driver` 3.x). The connection string is config
 `ConnectionStrings:CtmsDatabase` (override with `ConnectionStrings__CtmsDatabase`); the database
 name is configuration key `Mongo:Database`, default `ctms` (override with `Mongo__Database`). No
 credentials are committed — `appsettings.json` ships `mongodb://localhost:27017`.
+
+### Bundle cache (Redis)
+
+`AddInfrastructure` registers a distributed cache that fronts the latest-bundle read route.
+When `ConnectionStrings:Redis` is set (env `ConnectionStrings__Redis`; StackExchange.Redis
+`host:port[,options]`, e.g. `redis:6379`) it uses `AddStackExchangeRedisCache`; otherwise it
+falls back to `AddDistributedMemoryCache`, so a local `dotnet run` needs no Redis. The active
+backend is logged once at startup (`CacheModeLogger`). `IBundleCache` (port in
+`CTMS.Application`, `BundleCache` impl in `CTMS.Infrastructure/Persistence/Caching`) stores the
+serialized `TranslationBundleDto` under `ctms:bundle:{projectId}:{localeCode}:latest` (locale
+code trimmed + lower-cased); TTL is `Cache:BundleTtlMinutes` (default 60). Only present bundles
+are cached (no negative caching); a cache backend failure is logged and treated as a miss.
 
 ### API surface
 
@@ -204,8 +218,11 @@ Known application/domain exceptions become RFC 7807 ProblemDetails in
   "TranslationBundle"`). `version` is monotonic per `(projectId, localeCode)` from 1; `etag`
   is a content hash of the entries (stable for identical content).
 - `GET /api/projects/{projectId:guid}/bundles/{localeCode}` — latest `TranslationBundleDto`
-  or `404`. Plain JSON; the `ETag` header / `If-None-Match` / `304` and the Redis cache on
-  this route are **WS4**, still to build (the `etag` value is already in the body).
+  or `404`. Conditional GET: sets `ETag: "<etag>"` (strong) and `Cache-Control: no-cache`;
+  a request whose `If-None-Match` matches (quoted / `W/` weak / comma list / `*`) gets
+  `304 Not Modified` with no body and the `ETag` still set. Read-through cache (Redis, or an
+  in-process fallback) means a hit answers `304`/`200` without a MongoDB round-trip;
+  `PublishAsync` invalidates the key.
 - `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions` — `BundleVersionDto[]`
   (`version`, `etag`, `createdAt`, `createdBy`, `entryCount`), ascending by `version`.
 - `GET /api/projects/{projectId:guid}/bundles/{localeCode}/versions/{version:int}` —

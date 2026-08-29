@@ -1,3 +1,4 @@
+using CTMS.Api.Infrastructure;
 using CTMS.Application.Translations;
 
 namespace CTMS.Api.Endpoints;
@@ -34,18 +35,34 @@ internal static class BundleEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
-        // Plain JSON; ETag / If-None-Match / 304 + Redis caching is WS4.
+        // Conditional GET: the latest bundle is fronted by Redis (in-memory fallback locally) and
+        // carries a strong ETag. `Cache-Control: no-cache` lets a client store the response but
+        // forces revalidation, which an `If-None-Match` turns into a cheap `304` (served straight
+        // from the cache, no MongoDB round-trip). `.../versions` and `.../versions/{n}` stay
+        // uncached and unconditioned.
         group.MapGet("/{localeCode}", async (
                 Guid projectId,
                 string localeCode,
                 TranslationBundleService bundles,
+                HttpContext http,
                 CancellationToken cancellationToken) =>
             {
                 var bundle = await bundles.GetLatestAsync(projectId, localeCode, cancellationToken);
-                return bundle is null ? Results.NotFound() : Results.Ok(bundle);
+                if (bundle is null)
+                {
+                    return Results.NotFound();
+                }
+
+                http.Response.Headers.ETag = $"\"{bundle.ETag}\"";
+                http.Response.Headers.CacheControl = "no-cache";
+
+                return BundleConditionalRequest.IsNotModified(http.Request.Headers.IfNoneMatch, bundle.ETag)
+                    ? Results.StatusCode(StatusCodes.Status304NotModified)
+                    : Results.Ok(bundle);
             })
             .WithName("GetLatestBundle")
             .Produces<TranslationBundleDto>()
+            .Produces(StatusCodes.Status304NotModified)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/{localeCode}/versions", async (
