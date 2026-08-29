@@ -36,12 +36,12 @@ public sealed class RequestSizeLimitTests(MongoFixture mongo) : IAsyncLifetime
         var payload = JsonSerializer.Serialize(new
         {
             name = "Big",
-            baseLocaleCode = "en",
+            baseLanguageCode = "en",
             description = new string('x', CapBytes * 4),
         });
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
 
-        using var response = await client.PostAsync("/api/projects", content);
+        using var response = await client.PostAsync("/api/applications", content);
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
     }
@@ -54,11 +54,11 @@ public sealed class RequestSizeLimitTests(MongoFixture mongo) : IAsyncLifetime
         var payload = JsonSerializer.Serialize(new
         {
             name = ApiHelpers.UniqueName("Small"),
-            baseLocaleCode = "en",
+            baseLanguageCode = "en",
         });
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
 
-        using var response = await client.PostAsync("/api/projects", content);
+        using var response = await client.PostAsync("/api/applications", content);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }

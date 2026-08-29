@@ -1,5 +1,5 @@
 using CTMS.Domain.Audit;
-using CTMS.Domain.Locales;
+using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
 using CTMS.Infrastructure.Persistence.Mongo;
@@ -28,32 +28,39 @@ public sealed class MongoIndexInitializer : IHostedService
 
         var unique = new CreateIndexOptions { Unique = true };
 
+        await context.Languages.Indexes.CreateOneAsync(
+            new CreateIndexModel<Language>(
+                Builders<Language>.IndexKeys.Ascending(l => l.Code),
+                unique),
+            cancellationToken: cancellationToken);
+
         await context.Projects.Indexes.CreateOneAsync(
             new CreateIndexModel<Project>(
                 Builders<Project>.IndexKeys.Ascending(p => p.Slug),
                 unique),
             cancellationToken: cancellationToken);
 
-        await context.Locales.Indexes.CreateOneAsync(
-            new CreateIndexModel<Locale>(
-                Builders<Locale>.IndexKeys.Ascending(l => l.ProjectId).Ascending(l => l.Code),
-                unique),
-            cancellationToken: cancellationToken);
-
-        await context.TranslationKeys.Indexes.CreateOneAsync(
-            new CreateIndexModel<TranslationKey>(
-                Builders<TranslationKey>.IndexKeys.Ascending(k => k.ProjectId).Ascending(k => k.KeyName),
-                unique),
+        await context.TranslationKeys.Indexes.CreateManyAsync(
+            new[]
+            {
+                new CreateIndexModel<TranslationKey>(
+                    Builders<TranslationKey>.IndexKeys.Ascending(k => k.ProjectId).Ascending(k => k.KeyName),
+                    unique),
+                new CreateIndexModel<TranslationKey>(
+                    Builders<TranslationKey>.IndexKeys.Ascending(k => k.ProjectId).Ascending(k => k.Category)),
+            },
             cancellationToken: cancellationToken);
 
         await context.TranslationStrings.Indexes.CreateManyAsync(
             new[]
             {
                 new CreateIndexModel<TranslationString>(
-                    Builders<TranslationString>.IndexKeys.Ascending(s => s.TranslationKeyId).Ascending(s => s.LocaleId),
+                    Builders<TranslationString>.IndexKeys
+                        .Ascending(s => s.TranslationKeyId)
+                        .Ascending(s => s.LanguageCode),
                     unique),
 
-                // Backs the project-wide review-state listing: filter by key set (+ optional
+                // Backs the application-wide review-state listing: filter by key set (+ optional
                 // review state), sorted newest-updated first.
                 new CreateIndexModel<TranslationString>(
                     Builders<TranslationString>.IndexKeys
@@ -61,15 +68,6 @@ public sealed class MongoIndexInitializer : IHostedService
                         .Ascending(s => s.ReviewState)
                         .Descending(s => s.UpdatedAt)),
             },
-            cancellationToken: cancellationToken);
-
-        await context.TranslationBundles.Indexes.CreateOneAsync(
-            new CreateIndexModel<TranslationBundle>(
-                Builders<TranslationBundle>.IndexKeys
-                    .Ascending(b => b.ProjectId)
-                    .Ascending(b => b.LocaleCode)
-                    .Ascending(b => b.Version),
-                unique),
             cancellationToken: cancellationToken);
 
         await context.AuditEntries.Indexes.CreateManyAsync(

@@ -45,7 +45,7 @@ public sealed class ReviewWorkflowTests
 
     private static TranslationString StringInState(ReviewState state)
     {
-        var translationString = new TranslationString(Guid.NewGuid(), Guid.NewGuid(), "value", "author");
+        var translationString = new TranslationString(Guid.NewGuid(), "en-GB", "value", "author");
 
         switch (state)
         {

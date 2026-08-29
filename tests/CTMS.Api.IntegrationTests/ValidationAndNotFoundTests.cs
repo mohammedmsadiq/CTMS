@@ -11,26 +11,26 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     [Fact]
-    public async Task Unknown_project_id_is_404()
+    public async Task Unknown_application_code_is_404()
     {
         using var client = Factory.ClientAs(AuthRoles.Reader);
 
-        using var response = await client.GetAsync($"/api/projects/{Guid.NewGuid()}");
+        using var response = await client.GetAsync($"/api/applications/{ApiHelpers.UniqueName("nope")}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
-    public async Task Duplicate_project_slug_is_409()
+    public async Task Duplicate_application_code_is_409()
     {
         using var client = Factory.ClientAs(AuthRoles.Admin);
-        var slug = ApiHelpers.UniqueName("dup");
+        var code = ApiHelpers.UniqueName("dup");
 
-        await client.CreateProjectAsync(slug: slug);
+        await client.CreateApplicationAsync(code: code);
 
         using var second = await client.PostAsJsonAsync(
-            "/api/projects",
-            new CreateProjectRequest(ApiHelpers.UniqueName("Other"), "en", slug));
+            "/api/applications",
+            new CreateApplicationRequest(ApiHelpers.UniqueName("Other"), "en-GB", code));
 
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
@@ -40,11 +40,24 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
     {
         using var admin = Factory.ClientAs(AuthRoles.Admin);
         using var client = Factory.ClientAs(AuthRoles.Manager);
-        var project = await admin.CreateProjectAsync();
+        var app = await admin.CreateApplicationAsync();
 
         using var response = await client.PostAsJsonAsync(
-            $"/api/projects/{project.Id}/keys",
-            new CreateTranslationKeyRequest("not a valid key!", null));
+            $"/api/applications/{app.Code}/keys",
+            new CreateTranslationKeyRequest("not a valid key!", "Common"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Missing_category_on_a_key_is_400()
+    {
+        using var admin = Factory.ClientAs(AuthRoles.Admin);
+        var app = await admin.CreateApplicationAsync();
+
+        using var response = await admin.PostAsJsonAsync(
+            $"/api/applications/{app.Code}/keys",
+            new CreateTranslationKeyRequest("valid.key", ""));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -52,13 +65,26 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
     [Fact]
     public async Task Unknown_review_state_filter_is_400()
     {
-        using var client = Factory.ClientAs(AuthRoles.Reader);
         using var admin = Factory.ClientAs(AuthRoles.Admin);
-        var project = await admin.CreateProjectAsync();
+        var app = await admin.CreateApplicationAsync();
 
-        using var response = await client.GetAsync(
-            $"/api/projects/{project.Id}/strings?reviewState=bogus");
+        using var response = await admin.GetAsync(
+            $"/api/applications/{app.Code}/strings?reviewState=bogus");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Upsert_to_a_language_not_enabled_for_the_application_is_404()
+    {
+        using var admin = Factory.ClientAs(AuthRoles.Admin);
+        await admin.CreateLanguageAsync("en-GB", "English");
+        await admin.CreateLanguageAsync("de-DE", "German");
+        var app = await admin.CreateApplicationAsync(enabledLanguageCodes: ["en-GB"]);
+        var key = await admin.CreateKeyAsync(app.Code, "k.one");
+
+        using var response = await admin.PutStringRaw(app.Code, key.Id, "de-DE", "Wert");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

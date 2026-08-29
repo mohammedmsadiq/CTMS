@@ -10,37 +10,37 @@ internal static class TranslationStringEndpoints
     {
         // Reads: any recognised role (CanRead). Upsert: translator and up (CanEditStrings).
         var group = endpoints
-            .MapGroup("/api/projects/{projectId:guid}/keys/{keyId:guid}/strings")
+            .MapGroup("/api/applications/{application}/keys/{keyId:guid}/strings")
             .WithTags("Translation strings");
 
-        var projectGroup = endpoints
-            .MapGroup("/api/projects/{projectId:guid}/strings")
+        var applicationGroup = endpoints
+            .MapGroup("/api/applications/{application}/strings")
             .WithTags("Translation strings")
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
-        projectGroup.MapGet("/", async (
-                Guid projectId,
+        applicationGroup.MapGet("/", async (
+                string application,
                 TranslationStringService strings,
                 CancellationToken cancellationToken,
                 string? reviewState = null,
                 int skip = 0,
                 int take = 50) =>
             {
-                var page = await strings.ListByProjectAsync(projectId, reviewState, skip, take, cancellationToken);
+                var page = await strings.ListByProjectAsync(application, reviewState, skip, take, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
-            .WithName("ListProjectTranslationStrings")
+            .WithName("ListApplicationTranslationStrings")
             .Produces<PagedResult<TranslationStringDto>>()
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/", async (
-                Guid projectId,
+                string application,
                 Guid keyId,
                 TranslationStringService strings,
                 CancellationToken cancellationToken) =>
             {
-                var items = await strings.ListByKeyAsync(projectId, keyId, cancellationToken);
+                var items = await strings.ListByKeyAsync(application, keyId, cancellationToken);
                 return items is null ? Results.NotFound() : Results.Ok(items);
             })
             .WithName("ListTranslationStrings")
@@ -48,14 +48,14 @@ internal static class TranslationStringEndpoints
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
-        group.MapGet("/{localeId:guid}", async (
-                Guid projectId,
+        group.MapGet("/{language}", async (
+                string application,
                 Guid keyId,
-                Guid localeId,
+                string language,
                 TranslationStringService strings,
                 CancellationToken cancellationToken) =>
             {
-                var translationString = await strings.GetAsync(projectId, keyId, localeId, cancellationToken);
+                var translationString = await strings.GetAsync(application, keyId, language, cancellationToken);
                 return translationString is null ? Results.NotFound() : Results.Ok(translationString);
             })
             .WithName("GetTranslationString")
@@ -63,10 +63,10 @@ internal static class TranslationStringEndpoints
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
-        group.MapPut("/{localeId:guid}", async (
-                Guid projectId,
+        group.MapPut("/{language}", async (
+                string application,
                 Guid keyId,
-                Guid localeId,
+                string language,
                 UpsertTranslationStringRequest request,
                 TranslationStringService strings,
                 HttpContext http,
@@ -77,9 +77,9 @@ internal static class TranslationStringEndpoints
                 {
                     UpdatedBy = TokenActor.Resolve(http.User, request.UpdatedBy, request.UpdatedBy ?? string.Empty),
                 };
-                var result = await strings.UpsertAsync(projectId, keyId, localeId, effective, cancellationToken);
+                var result = await strings.UpsertAsync(application, keyId, language, effective, cancellationToken);
                 return result.Created
-                    ? Results.CreatedAtRoute("GetTranslationString", new { projectId, keyId, localeId }, result.String)
+                    ? Results.CreatedAtRoute("GetTranslationString", new { application, keyId, language }, result.String)
                     : Results.Ok(result.String);
             })
             .WithName("UpsertTranslationString")
@@ -87,7 +87,6 @@ internal static class TranslationStringEndpoints
             .Produces<TranslationStringDto>()
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict)
             .RequireAuthorization(AuthorizationPolicies.CanEditStrings);
 
         return endpoints;

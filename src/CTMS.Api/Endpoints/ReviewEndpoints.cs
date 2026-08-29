@@ -8,16 +8,16 @@ internal static class ReviewEndpoints
     public static IEndpointRouteBuilder MapReviewEndpoints(this IEndpointRouteBuilder endpoints)
     {
         // All review transitions — submit/approve/reject/reopen and the `publish` action —
-        // require CanReview (admin/manager/reviewer). Bundle publication is separate (CanPublish).
+        // require CanReview (admin/manager/reviewer). Bulk publish is separate (CanPublish).
         var group = endpoints
-            .MapGroup("/api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}/review")
+            .MapGroup("/api/applications/{application}/keys/{keyId:guid}/strings/{language}/review")
             .WithTags("Review")
             .RequireAuthorization(AuthorizationPolicies.CanReview);
 
         group.MapPost("/", async (
-                Guid projectId,
+                string application,
                 Guid keyId,
-                Guid localeId,
+                string language,
                 ReviewRequest request,
                 TranslationStringService strings,
                 HttpContext http,
@@ -27,9 +27,9 @@ internal static class ReviewEndpoints
                 var reviewedBy = TokenActor.Resolve(http.User, request.ReviewedBy, request.ReviewedBy);
 
                 var reviewed = await strings.ReviewAsync(
-                    projectId,
+                    application,
                     keyId,
-                    localeId,
+                    language,
                     request.Action,
                     reviewedBy,
                     cancellationToken);

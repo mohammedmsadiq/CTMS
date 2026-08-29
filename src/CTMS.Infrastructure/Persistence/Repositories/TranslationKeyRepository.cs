@@ -14,17 +14,23 @@ public sealed class TranslationKeyRepository : ITranslationKeyRepository
 
     public async Task<IReadOnlyList<TranslationKey>> ListByProjectAsync(
         Guid projectId,
+        string? category,
         int skip,
         int take,
         CancellationToken cancellationToken = default)
-        => await _context.TranslationKeys.Find(k => k.ProjectId == projectId)
+        => await _context.TranslationKeys.Find(ByProjectAndCategory(projectId, category))
             .SortBy(k => k.KeyName)
             .Skip(skip)
             .Limit(take)
             .ToListAsync(cancellationToken);
 
-    public async Task<int> CountByProjectAsync(Guid projectId, CancellationToken cancellationToken = default)
-        => (int)await _context.TranslationKeys.CountDocumentsAsync(k => k.ProjectId == projectId, cancellationToken: cancellationToken);
+    public async Task<int> CountByProjectAsync(
+        Guid projectId,
+        string? category,
+        CancellationToken cancellationToken = default)
+        => (int)await _context.TranslationKeys.CountDocumentsAsync(
+            ByProjectAndCategory(projectId, category),
+            cancellationToken: cancellationToken);
 
     public async Task<TranslationKey?> GetAsync(Guid projectId, Guid keyId, CancellationToken cancellationToken = default)
         => await _context.TranslationKeys.Find(k => k.Id == keyId && k.ProjectId == projectId)
@@ -32,6 +38,19 @@ public sealed class TranslationKeyRepository : ITranslationKeyRepository
 
     public Task<bool> KeyNameExistsAsync(Guid projectId, string keyName, CancellationToken cancellationToken = default)
         => _context.TranslationKeys.Find(k => k.ProjectId == projectId && k.KeyName == keyName).AnyAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<TranslationKey>> ListByProjectsAsync(
+        IReadOnlyCollection<Guid> projectIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectIds.Count == 0)
+        {
+            return [];
+        }
+
+        var filter = Builders<TranslationKey>.Filter.In(k => k.ProjectId, projectIds);
+        return await _context.TranslationKeys.Find(filter).SortBy(k => k.KeyName).ToListAsync(cancellationToken);
+    }
 
     public async Task AddAsync(TranslationKey key, CancellationToken cancellationToken = default)
     {
@@ -41,7 +60,7 @@ public sealed class TranslationKeyRepository : ITranslationKeyRepository
         }
         catch (MongoWriteException ex) when (ex.IsDuplicateKey())
         {
-            throw new ConflictException($"A key named '{key.KeyName}' already exists in this project.");
+            throw new ConflictException($"A key named '{key.KeyName}' already exists in this application.");
         }
     }
 
@@ -57,5 +76,16 @@ public sealed class TranslationKeyRepository : ITranslationKeyRepository
         // Explicitly remove the dependent strings; MongoDB does not enforce foreign keys.
         await _context.TranslationStrings.DeleteManyAsync(s => s.TranslationKeyId == key.Id, cancellationToken);
         await _context.TranslationKeys.DeleteOneAsync(k => k.Id == key.Id, cancellationToken);
+    }
+
+    private static FilterDefinition<TranslationKey> ByProjectAndCategory(Guid projectId, string? category)
+    {
+        var filter = Builders<TranslationKey>.Filter.Eq(k => k.ProjectId, projectId);
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            filter &= Builders<TranslationKey>.Filter.Eq(k => k.Category, category.Trim());
+        }
+
+        return filter;
     }
 }

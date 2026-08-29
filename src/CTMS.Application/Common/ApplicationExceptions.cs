@@ -9,11 +9,11 @@ public class ValidationException : Exception
     }
 }
 
-/// <summary>Raised when creating a project whose slug is already taken.</summary>
+/// <summary>Raised when creating an application whose slug/code is already taken.</summary>
 public sealed class SlugAlreadyInUseException : Exception
 {
     public SlugAlreadyInUseException(string slug)
-        : base($"A project with the slug '{slug}' already exists.")
+        : base($"An application with the code '{slug}' already exists.")
         => Slug = slug;
 
     public string Slug { get; }
@@ -35,17 +35,4 @@ public sealed class ConflictException : Exception
         : base(message)
     {
     }
-}
-
-/// <summary>
-/// Raised when an update is rejected because the caller's expected version no longer
-/// matches the stored one.
-/// </summary>
-public sealed class ConcurrencyException : Exception
-{
-    public ConcurrencyException(long currentVersion)
-        : base("The translation string was changed by someone else; reload and retry.")
-        => CurrentVersion = currentVersion;
-
-    public long CurrentVersion { get; }
 }

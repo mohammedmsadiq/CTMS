@@ -1,12 +1,11 @@
 using CTMS.Domain.Audit;
 using CTMS.Domain.Common;
-using CTMS.Domain.Locales;
+using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
-using MongoDB.Bson.Serialization.Options;
 using MongoDB.Bson.Serialization.Serializers;
 
 namespace CTMS.Infrastructure.Persistence.Mongo;
@@ -50,7 +49,7 @@ public static class MongoMappingRegistration
                 type => type.Namespace?.StartsWith("CTMS.", StringComparison.Ordinal) == true);
 
             RegisterEntity<Project>();
-            RegisterEntity<Locale>();
+            RegisterEntity<Language>();
             RegisterEntity<TranslationKey>();
             RegisterEntity<TranslationString>();
 
@@ -59,21 +58,6 @@ public static class MongoMappingRegistration
             if (!BsonClassMap.IsClassMapRegistered(typeof(AuditEntry)))
             {
                 BsonClassMap.RegisterClassMap<AuditEntry>(cm => cm.AutoMap());
-            }
-
-            if (!BsonClassMap.IsClassMapRegistered(typeof(TranslationBundle)))
-            {
-                BsonClassMap.RegisterClassMap<TranslationBundle>(cm =>
-                {
-                    cm.AutoMap();
-
-                    // Bundle keys are dotted translation-key paths, so store the map as an
-                    // array of { k, v } documents rather than as element names.
-                    cm.MapMember(x => x.Entries).SetSerializer(
-                        new ImpliedImplementationInterfaceSerializer<IReadOnlyDictionary<string, string>, Dictionary<string, string>>(
-                            new DictionaryInterfaceImplementerSerializer<Dictionary<string, string>, string, string>(
-                                DictionaryRepresentation.ArrayOfDocuments)));
-                });
             }
 
             _registered = true;

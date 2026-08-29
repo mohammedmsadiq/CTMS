@@ -31,7 +31,7 @@ public sealed class CorsTests(MongoFixture mongo) : IAsyncLifetime
     {
         using var client = _factory.AnonymousClient();
 
-        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/projects");
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/applications");
         request.Headers.Add("Origin", AllowedOrigin);
         request.Headers.Add("Access-Control-Request-Method", "GET");
 
@@ -46,7 +46,7 @@ public sealed class CorsTests(MongoFixture mongo) : IAsyncLifetime
     {
         using var client = _factory.AnonymousClient();
 
-        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/projects");
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/applications");
         request.Headers.Add("Origin", "https://evil.example.com");
         request.Headers.Add("Access-Control-Request-Method", "GET");
 
@@ -61,7 +61,7 @@ public sealed class CorsTests(MongoFixture mongo) : IAsyncLifetime
         using var client = _factory.ClientAs(AuthRoles.Admin);
         client.DefaultRequestHeaders.Add("Origin", AllowedOrigin);
 
-        using var response = await client.GetAsync("/api/projects");
+        using var response = await client.GetAsync("/api/applications");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(AllowedOrigin, Assert.Single(response.Headers.GetValues("Access-Control-Allow-Origin")));

@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using CTMS.Application.Locales;
+using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
 
@@ -15,68 +15,87 @@ internal static class ApiHelpers
 {
     public static string UniqueName(string prefix) => $"{prefix}-{Guid.NewGuid():N}";
 
-    public static async Task<ProjectDto> CreateProjectAsync(
+    public static async Task<LanguageDto> CreateLanguageAsync(
         this HttpClient client,
+        string code,
         string? name = null,
-        string? slug = null,
-        string baseLocaleCode = "en")
+        string? fallbackCode = null,
+        bool isRtl = false)
     {
-        name ??= UniqueName("Project");
         var response = await client.PostAsJsonAsync(
-            "/api/projects",
-            new CreateProjectRequest(name, baseLocaleCode, slug));
+            "/api/languages",
+            new CreateLanguageRequest(code, name ?? code, fallbackCode, isRtl));
+        // Registering the same language twice across tests sharing a database is fine.
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            return (await client.GetFromJsonAsync<LanguageDto>($"/api/languages/{code}"))!;
+        }
+
         await AssertStatus(response, HttpStatusCode.Created);
-        return (await response.Content.ReadFromJsonAsync<ProjectDto>())!;
+        return (await response.Content.ReadFromJsonAsync<LanguageDto>())!;
     }
 
-    public static async Task<LocaleDto> CreateLocaleAsync(
+    public static async Task<ApplicationDto> CreateApplicationAsync(
         this HttpClient client,
-        Guid projectId,
-        string code,
-        string? displayName = null)
+        string? code = null,
+        string? name = null,
+        string baseLanguageCode = "en-GB",
+        bool isShared = false,
+        IReadOnlyList<string>? enabledLanguageCodes = null)
     {
+        name ??= UniqueName("App");
         var response = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/locales",
-            new CreateLocaleRequest(code, displayName ?? code.ToUpperInvariant()));
+            "/api/applications",
+            new CreateApplicationRequest(name, baseLanguageCode, code, null, isShared, enabledLanguageCodes));
         await AssertStatus(response, HttpStatusCode.Created);
-        return (await response.Content.ReadFromJsonAsync<LocaleDto>())!;
+        return (await response.Content.ReadFromJsonAsync<ApplicationDto>())!;
+    }
+
+    public static async Task<ApplicationDto> EnableLanguageAsync(
+        this HttpClient client,
+        string applicationCode,
+        string language)
+    {
+        var response = await client.PutAsync(
+            $"/api/applications/{applicationCode}/languages/{language}", content: null);
+        await AssertStatus(response, HttpStatusCode.OK);
+        return (await response.Content.ReadFromJsonAsync<ApplicationDto>())!;
     }
 
     public static async Task<TranslationKeyDto> CreateKeyAsync(
         this HttpClient client,
-        Guid projectId,
-        string? keyName = null)
+        string applicationCode,
+        string? keyName = null,
+        string category = "Common")
     {
         keyName ??= "key." + Guid.NewGuid().ToString("N");
         var response = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/keys",
-            new CreateTranslationKeyRequest(keyName));
+            $"/api/applications/{applicationCode}/keys",
+            new CreateTranslationKeyRequest(keyName, category));
         await AssertStatus(response, HttpStatusCode.Created);
         return (await response.Content.ReadFromJsonAsync<TranslationKeyDto>())!;
     }
 
     public static Task<HttpResponseMessage> PutStringRaw(
         this HttpClient client,
-        Guid projectId,
+        string applicationCode,
         Guid keyId,
-        Guid localeId,
+        string language,
         string value,
-        long? expectedVersion = null,
         string? updatedBy = null)
         => client.PutAsJsonAsync(
-            $"/api/projects/{projectId}/keys/{keyId}/strings/{localeId}",
-            new UpsertTranslationStringRequest(value, updatedBy, expectedVersion));
+            $"/api/applications/{applicationCode}/keys/{keyId}/strings/{language}",
+            new UpsertTranslationStringRequest(value, updatedBy));
 
     public static async Task<TranslationStringDto> UpsertStringAsync(
         this HttpClient client,
-        Guid projectId,
+        string applicationCode,
         Guid keyId,
-        Guid localeId,
+        string language,
         string value,
-        long? expectedVersion = null,
         string? updatedBy = null)
     {
-        var response = await client.PutStringRaw(projectId, keyId, localeId, value, expectedVersion, updatedBy);
+        var response = await client.PutStringRaw(applicationCode, keyId, language, value, updatedBy);
         if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Created))
         {
             throw await Failure(response, "200 or 201");
@@ -87,61 +106,58 @@ internal static class ApiHelpers
 
     public static Task<HttpResponseMessage> ReviewRaw(
         this HttpClient client,
-        Guid projectId,
+        string applicationCode,
         Guid keyId,
-        Guid localeId,
+        string language,
         string action,
         string reviewedBy = "reviewer")
         => client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/keys/{keyId}/strings/{localeId}/review",
+            $"/api/applications/{applicationCode}/keys/{keyId}/strings/{language}/review",
             new ReviewRequest(action, reviewedBy));
 
     public static async Task ReviewAsync(
         this HttpClient client,
-        Guid projectId,
+        string applicationCode,
         Guid keyId,
-        Guid localeId,
+        string language,
         string action,
         string reviewedBy = "reviewer")
     {
-        var response = await client.ReviewRaw(projectId, keyId, localeId, action, reviewedBy);
+        var response = await client.ReviewRaw(applicationCode, keyId, language, action, reviewedBy);
         await AssertStatus(response, HttpStatusCode.OK);
     }
 
-    public static Task<HttpResponseMessage> PublishBundleRaw(
+    public static Task<HttpResponseMessage> BulkPublishRaw(
         this HttpClient client,
-        Guid projectId,
-        string localeCode,
-        string? publishedBy = null)
-        => client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/bundles/{localeCode}",
-            new PublishBundleRequest(publishedBy));
+        string applicationCode,
+        string? language = null)
+        => client.PostAsJsonAsync("/api/translations/publish", new PublishTranslationsRequest(applicationCode, language));
 
-    public static async Task<TranslationBundleDto> PublishBundleAsync(
+    public static async Task<PublishTranslationsResult> BulkPublishAsync(
         this HttpClient client,
-        Guid projectId,
-        string localeCode,
-        string? publishedBy = null)
+        string applicationCode,
+        string? language = null)
     {
-        var response = await client.PublishBundleRaw(projectId, localeCode, publishedBy);
-        await AssertStatus(response, HttpStatusCode.Created);
-        return (await response.Content.ReadFromJsonAsync<TranslationBundleDto>())!;
+        var response = await client.BulkPublishRaw(applicationCode, language);
+        await AssertStatus(response, HttpStatusCode.OK);
+        return (await response.Content.ReadFromJsonAsync<PublishTranslationsResult>())!;
     }
 
     /// <summary>Create key ⇒ upsert ⇒ submit ⇒ approve ⇒ review-<c>publish</c>, leaving the
-    /// string in <c>Published</c> so a bundle can be cut for the locale.</summary>
+    /// string in <c>Published</c> for the language.</summary>
     public static async Task<TranslationKeyDto> PublishStringAsync(
         this HttpClient admin,
-        Guid projectId,
-        Guid localeId,
+        string applicationCode,
+        string language,
         string keyName,
-        string value)
+        string value,
+        string category = "Common")
     {
-        var key = await admin.CreateKeyAsync(projectId, keyName);
-        await admin.UpsertStringAsync(projectId, key.Id, localeId, value);
-        await admin.ReviewAsync(projectId, key.Id, localeId, "submit");
-        await admin.ReviewAsync(projectId, key.Id, localeId, "approve");
-        await admin.ReviewAsync(projectId, key.Id, localeId, "publish");
+        var key = await admin.CreateKeyAsync(applicationCode, keyName, category);
+        await admin.UpsertStringAsync(applicationCode, key.Id, language, value);
+        await admin.ReviewAsync(applicationCode, key.Id, language, "submit");
+        await admin.ReviewAsync(applicationCode, key.Id, language, "approve");
+        await admin.ReviewAsync(applicationCode, key.Id, language, "publish");
         return key;
     }
 

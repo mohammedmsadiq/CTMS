@@ -17,14 +17,15 @@ public sealed class ActorFromTokenTests(MongoFixture mongo) : IntegrationTest(mo
     public async Task Upsert_records_the_token_name_not_the_body_updatedBy()
     {
         using var admin = Factory.ClientAs(AuthRoles.Admin);
-        var project = await admin.CreateProjectAsync(slug: ApiHelpers.UniqueName("actor"));
-        var en = await admin.CreateLocaleAsync(project.Id, "en", "English");
-        var key = await admin.CreateKeyAsync(project.Id, "actor.key");
+        await admin.CreateLanguageAsync("en-GB", "English");
+        var app = await admin.CreateApplicationAsync(
+            code: ApiHelpers.UniqueName("actor"), enabledLanguageCodes: ["en-GB"]);
+        var key = await admin.CreateKeyAsync(app.Code, "actor.key");
 
         using var translator = Factory.ClientAsActor("translator-alice", AuthRoles.Translator);
 
         using var putResponse = await translator.PutAsJsonAsync(
-            $"/api/projects/{project.Id}/keys/{key.Id}/strings/{en.Id}",
+            $"/api/applications/{app.Code}/keys/{key.Id}/strings/en-GB",
             new UpsertTranslationStringRequest("hello", UpdatedBy: "someone-else"));
 
         Assert.Equal(HttpStatusCode.Created, putResponse.StatusCode);
@@ -32,7 +33,7 @@ public sealed class ActorFromTokenTests(MongoFixture mongo) : IntegrationTest(mo
         Assert.Equal("translator-alice", created.UpdatedBy);
 
         var fetched = (await translator.GetFromJsonAsync<TranslationStringDto>(
-            $"/api/projects/{project.Id}/keys/{key.Id}/strings/{en.Id}"))!;
+            $"/api/applications/{app.Code}/keys/{key.Id}/strings/en-GB"))!;
         Assert.Equal("translator-alice", fetched.UpdatedBy);
     }
 }

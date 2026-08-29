@@ -1,6 +1,6 @@
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
-using CTMS.Application.Locales;
+using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
 using CTMS.Infrastructure.Persistence.Caching;
@@ -33,25 +33,27 @@ public sealed class CtmsTestHarness : IDisposable
         MongoIndexInitializer.EnsureIndexesAsync(Context).GetAwaiter().GetResult();
 
         Projects = new ProjectRepository(Context);
-        Locales = new LocaleRepository(Context);
+        Languages = new LanguageRepository(Context);
         Keys = new TranslationKeyRepository(Context);
         Strings = new TranslationStringRepository(Context);
-        Bundles = new TranslationBundleRepository(Context);
         Audit = new AuditRepository(Context);
 
         DistributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-        BundleCache = new BundleCache(
+        TranslationsCache = new PublishedTranslationsCache(
             DistributedCache,
-            Options.Create(new BundleCacheOptions()),
-            NullLogger<BundleCache>.Instance);
+            Options.Create(new TranslationsCacheOptions()),
+            NullLogger<PublishedTranslationsCache>.Instance);
 
-        ProjectService = new ProjectService(Projects, UnitOfWork);
-        LocaleService = new LocaleService(Locales, Projects, UnitOfWork);
+        var invalidator = new TranslationCacheInvalidator(Projects, TranslationsCache);
+
+        ProjectService = new ProjectService(Projects, Languages, UnitOfWork);
+        LanguageService = new LanguageService(Languages, UnitOfWork);
         TranslationKeyService = new TranslationKeyService(Keys, Projects, UnitOfWork);
-        TranslationStringService = new TranslationStringService(Strings, Keys, Locales, Projects, Audit, UnitOfWork);
-        TranslationBundleService = new TranslationBundleService(
-            Bundles, Strings, Keys, Locales, Projects, Audit, BundleCache, UnitOfWork);
-        AuditService = new AuditService(Audit);
+        TranslationStringService = new TranslationStringService(
+            Strings, Keys, Languages, Projects, Audit, invalidator, UnitOfWork);
+        PublishedTranslationsService = new PublishedTranslationsService(
+            Projects, Languages, Keys, Strings, Audit, TranslationsCache, invalidator, UnitOfWork);
+        AuditService = new AuditService(Audit, Projects);
     }
 
     public IMongoContext Context { get; }
@@ -60,32 +62,29 @@ public sealed class CtmsTestHarness : IDisposable
 
     public IProjectRepository Projects { get; }
 
-    public ILocaleRepository Locales { get; }
+    public ILanguageRepository Languages { get; }
 
     public ITranslationKeyRepository Keys { get; }
 
     public ITranslationStringRepository Strings { get; }
 
-    public ITranslationBundleRepository Bundles { get; }
-
     public IAuditRepository Audit { get; }
 
-    /// <summary>The <see cref="IDistributedCache"/> backing <see cref="BundleCache"/> - an
+    /// <summary>The <see cref="IDistributedCache"/> backing <see cref="TranslationsCache"/> — an
     /// in-memory stand-in for Redis. Exposed so tests can assert on raw cache entries.</summary>
     public IDistributedCache DistributedCache { get; }
 
-    /// <summary>The bundle cache wired into <see cref="TranslationBundleService"/>.</summary>
-    public IBundleCache BundleCache { get; }
+    public IPublishedTranslationsCache TranslationsCache { get; }
 
     public ProjectService ProjectService { get; }
 
-    public LocaleService LocaleService { get; }
+    public LanguageService LanguageService { get; }
 
     public TranslationKeyService TranslationKeyService { get; }
 
     public TranslationStringService TranslationStringService { get; }
 
-    public TranslationBundleService TranslationBundleService { get; }
+    public PublishedTranslationsService PublishedTranslationsService { get; }
 
     public AuditService AuditService { get; }
 

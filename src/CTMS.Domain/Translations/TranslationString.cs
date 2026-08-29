@@ -2,7 +2,7 @@ using CTMS.Domain.Common;
 
 namespace CTMS.Domain.Translations;
 
-/// <summary>The value of a <see cref="TranslationKey"/> in one locale.</summary>
+/// <summary>The value of a <see cref="TranslationKey"/> in one language. Last write wins.</summary>
 public sealed class TranslationString : Entity
 {
     private TranslationString()
@@ -10,23 +10,19 @@ public sealed class TranslationString : Entity
         // Materialization constructor for the persistence layer.
     }
 
-    public TranslationString(Guid translationKeyId, Guid localeId, string value, string updatedBy)
+    public TranslationString(Guid translationKeyId, string languageCode, string value, string updatedBy)
     {
         if (translationKeyId == Guid.Empty)
         {
             throw new ArgumentException("A translation string must reference a key.", nameof(translationKeyId));
         }
 
-        if (localeId == Guid.Empty)
-        {
-            throw new ArgumentException("A translation string must reference a locale.", nameof(localeId));
-        }
-
+        ArgumentException.ThrowIfNullOrWhiteSpace(languageCode);
         ArgumentNullException.ThrowIfNull(value);
         ArgumentException.ThrowIfNullOrWhiteSpace(updatedBy);
 
         TranslationKeyId = translationKeyId;
-        LocaleId = localeId;
+        LanguageCode = languageCode.Trim();
         Value = value;
         UpdatedBy = updatedBy.Trim();
         ReviewState = ReviewState.Draft;
@@ -34,21 +30,14 @@ public sealed class TranslationString : Entity
 
     public Guid TranslationKeyId { get; private set; }
 
-    public Guid LocaleId { get; private set; }
+    /// <summary>BCP-47 code of the language this value is for.</summary>
+    public string LanguageCode { get; private set; } = string.Empty;
 
     public string Value { get; private set; } = string.Empty;
 
     public ReviewState ReviewState { get; private set; }
 
     public string UpdatedBy { get; private set; } = string.Empty;
-
-    /// <summary>
-    /// Optimistic-concurrency token. A plain incrementing counter that the persistence layer
-    /// bumps on every stored update and guards with a filtered write, so concurrent edits to
-    /// the same string are detected. The setter is <c>internal</c> so only the infrastructure
-    /// assembly can advance it.
-    /// </summary>
-    public long Version { get; internal set; }
 
     public void Edit(string value, string editedBy)
     {

@@ -11,4 +11,6 @@ public sealed record AuditEntryDto(
     DateTime Timestamp,
     string? FromState,
     string? ToState,
-    string? Detail);
+    string? Detail,
+    string? OldValue,
+    string? NewValue);

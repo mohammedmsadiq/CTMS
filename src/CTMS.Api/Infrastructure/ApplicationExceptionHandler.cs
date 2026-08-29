@@ -22,9 +22,8 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
         {
             ValidationException => (StatusCodes.Status400BadRequest, "Invalid request"),
             NotFoundException => (StatusCodes.Status404NotFound, "Resource not found"),
-            SlugAlreadyInUseException => (StatusCodes.Status409Conflict, "Slug already in use"),
+            SlugAlreadyInUseException => (StatusCodes.Status409Conflict, "Application code already in use"),
             ConflictException => (StatusCodes.Status409Conflict, "Conflict"),
-            ConcurrencyException => (StatusCodes.Status409Conflict, "Concurrency conflict"),
             InvalidReviewTransitionException => (StatusCodes.Status409Conflict, "Invalid review transition"),
             _ => (0, string.Empty),
         };
@@ -42,11 +41,6 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
             Title = title,
             Detail = exception.Message,
         };
-
-        if (exception is ConcurrencyException concurrency)
-        {
-            problemDetails.Extensions["currentVersion"] = concurrency.CurrentVersion;
-        }
 
         return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
         {

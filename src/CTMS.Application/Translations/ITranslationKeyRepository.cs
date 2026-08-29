@@ -7,15 +7,24 @@ public interface ITranslationKeyRepository
 {
     Task<IReadOnlyList<TranslationKey>> ListByProjectAsync(
         Guid projectId,
+        string? category,
         int skip,
         int take,
         CancellationToken cancellationToken = default);
 
-    Task<int> CountByProjectAsync(Guid projectId, CancellationToken cancellationToken = default);
+    Task<int> CountByProjectAsync(
+        Guid projectId,
+        string? category,
+        CancellationToken cancellationToken = default);
 
     Task<TranslationKey?> GetAsync(Guid projectId, Guid keyId, CancellationToken cancellationToken = default);
 
     Task<bool> KeyNameExistsAsync(Guid projectId, string keyName, CancellationToken cancellationToken = default);
+
+    /// <summary>Every key belonging to any of <paramref name="projectIds"/>.</summary>
+    Task<IReadOnlyList<TranslationKey>> ListByProjectsAsync(
+        IReadOnlyCollection<Guid> projectIds,
+        CancellationToken cancellationToken = default);
 
     Task AddAsync(TranslationKey key, CancellationToken cancellationToken = default);
 

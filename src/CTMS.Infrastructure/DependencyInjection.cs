@@ -1,6 +1,6 @@
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
-using CTMS.Application.Locales;
+using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
 using CTMS.Infrastructure.Persistence.Caching;
@@ -22,8 +22,8 @@ public static class DependencyInjection
 
     /// <summary>
     /// Name of the Redis connection string in configuration (StackExchange.Redis format
-    /// <c>host:port[,options]</c>). When absent, the bundle cache falls back to an in-process
-    /// distributed-memory cache so a local <c>dotnet run</c> needs no Redis.
+    /// <c>host:port[,options]</c>). When absent, the translations cache falls back to an
+    /// in-process distributed-memory cache so a local <c>dotnet run</c> needs no Redis.
     /// </summary>
     public const string RedisConnectionStringName = "Redis";
 
@@ -53,16 +53,15 @@ public static class DependencyInjection
         services.AddSingleton<IUnitOfWork, NoOpUnitOfWork>();
 
         services.AddScoped<IProjectRepository, ProjectRepository>();
-        services.AddScoped<ILocaleRepository, LocaleRepository>();
+        services.AddScoped<ILanguageRepository, LanguageRepository>();
         services.AddScoped<ITranslationKeyRepository, TranslationKeyRepository>();
         services.AddScoped<ITranslationStringRepository, TranslationStringRepository>();
-        services.AddScoped<ITranslationBundleRepository, TranslationBundleRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
 
         services.AddHealthChecks()
             .AddCheck<MongoHealthCheck>("database", tags: ["ready"]);
 
-        AddBundleCache(services, configuration);
+        AddTranslationsCache(services, configuration);
 
         services.AddHostedService<MongoIndexInitializer>();
         services.AddHostedService<DataSeeder>();
@@ -71,12 +70,12 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// Registers the distributed cache that fronts <c>GET .../bundles/{localeCode}</c>:
+    /// Registers the distributed cache that fronts <c>GET /api/translations/{application}/{language}</c>:
     /// StackExchange.Redis when <c>ConnectionStrings:Redis</c> is set, otherwise an in-process
     /// distributed-memory cache. The active backend is logged once at startup by
     /// <see cref="CacheModeLogger"/>.
     /// </summary>
-    private static void AddBundleCache(IServiceCollection services, IConfiguration configuration)
+    private static void AddTranslationsCache(IServiceCollection services, IConfiguration configuration)
     {
         var redisConnectionString = configuration.GetConnectionString(RedisConnectionStringName);
         var usingRedis = !string.IsNullOrWhiteSpace(redisConnectionString);
@@ -90,11 +89,11 @@ public static class DependencyInjection
             services.AddDistributedMemoryCache();
         }
 
-        services.Configure<BundleCacheOptions>(options => options.BundleTtlMinutes =
+        services.Configure<TranslationsCacheOptions>(options => options.TranslationsTtlMinutes =
             configuration.GetValue(
-                $"{BundleCacheOptions.SectionName}:BundleTtlMinutes",
-                BundleCacheOptions.DefaultTtlMinutes));
-        services.AddSingleton<IBundleCache, BundleCache>();
+                $"{TranslationsCacheOptions.SectionName}:TranslationsTtlMinutes",
+                TranslationsCacheOptions.DefaultTtlMinutes));
+        services.AddSingleton<IPublishedTranslationsCache, PublishedTranslationsCache>();
         services.AddHostedService(provider =>
             new CacheModeLogger(provider.GetRequiredService<ILogger<CacheModeLogger>>(), usingRedis));
     }

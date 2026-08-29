@@ -105,12 +105,12 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     Predicate = registration => registration.Tags.Contains("ready"),
 }).DisableRateLimiting();
 
-app.MapProjectEndpoints();
-app.MapLocaleEndpoints();
+app.MapApplicationEndpoints();
+app.MapLanguageEndpoints();
 app.MapTranslationKeyEndpoints();
 app.MapTranslationStringEndpoints();
 app.MapReviewEndpoints();
-app.MapBundleEndpoints();
+app.MapTranslationEndpoints();
 app.MapAuditEndpoints();
 
 app.Run();

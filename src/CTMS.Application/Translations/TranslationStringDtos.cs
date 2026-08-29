@@ -4,23 +4,17 @@ namespace CTMS.Application.Translations;
 public sealed record TranslationStringDto(
     Guid Id,
     Guid TranslationKeyId,
-    Guid LocaleId,
-    string LocaleCode,
+    string LanguageCode,
     string Value,
-    string ReviewState,
+    string Status,
     string? UpdatedBy,
-    long Version,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-/// <summary>
-/// Payload for the string upsert. <see cref="ExpectedVersion"/>, when supplied, must match the
-/// stored optimistic-concurrency token or the request is rejected with 409.
-/// </summary>
+/// <summary>Payload for the string upsert. Last write wins — there is no version token.</summary>
 public sealed record UpsertTranslationStringRequest(
     string Value,
-    string? UpdatedBy = null,
-    long? ExpectedVersion = null);
+    string? UpdatedBy = null);
 
 /// <summary>Outcome of an upsert: the resulting string plus whether a new row was created.</summary>
 public sealed record UpsertTranslationStringResult(TranslationStringDto String, bool Created);
