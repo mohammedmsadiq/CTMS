@@ -80,18 +80,6 @@
     border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.nav-item ::deep .nav-link.disabled-nav {
-    opacity: 0.55;
-}
-
-.nav-item ::deep .soon {
-    font-size: 0.65rem;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 3px;
-    padding: 0 0.3rem;
-    margin-left: 0.4rem;
-}
-
 .nav-item {
     font-size: 0.9rem;
     padding-bottom: 0.5rem;

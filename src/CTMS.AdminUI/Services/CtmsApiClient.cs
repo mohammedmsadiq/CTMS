@@ -82,6 +82,40 @@ public sealed class CtmsApiClient(HttpClient http)
         SendAsync<TranslationStringDto>(
             HttpMethod.Post, $"api/projects/{projectId}/keys/{keyId}/strings/{localeId}/review", request, ct);
 
+    // ---- Bundles ---------------------------------------------------
+
+    /// <summary>Latest published bundle for a locale. <c>404</c> when nothing is published yet.</summary>
+    public Task<Result<BundleDto>> GetBundleAsync(Guid projectId, string localeCode, CancellationToken ct = default) =>
+        GetAsync<BundleDto>($"api/projects/{projectId}/bundles/{Uri.EscapeDataString(localeCode)}", ct);
+
+    public Task<Result<IReadOnlyList<BundleVersionDto>>> GetBundleVersionsAsync(
+        Guid projectId, string localeCode, CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<BundleVersionDto>>(
+            $"api/projects/{projectId}/bundles/{Uri.EscapeDataString(localeCode)}/versions", ct);
+
+    /// <summary>
+    /// Cuts a new bundle version from the locale's <c>Published</c> strings. <c>400</c> when
+    /// nothing is published, <c>404</c> unknown locale, <c>409</c> on a version race.
+    /// </summary>
+    public Task<Result<BundleDto>> PublishBundleAsync(
+        Guid projectId, string localeCode, string? publishedBy, CancellationToken ct = default) =>
+        SendAsync<BundleDto>(
+            HttpMethod.Post,
+            $"api/projects/{projectId}/bundles/{Uri.EscapeDataString(localeCode)}",
+            new PublishBundleRequest(publishedBy),
+            ct);
+
+    // ---- History / audit trail ----------------------------------
+
+    public Task<Result<PagedResult<AuditEntryDto>>> GetProjectHistoryAsync(
+        Guid projectId, int skip, int take, CancellationToken ct = default) =>
+        GetAsync<PagedResult<AuditEntryDto>>($"api/projects/{projectId}/history?skip={skip}&take={take}", ct);
+
+    public Task<Result<IReadOnlyList<AuditEntryDto>>> GetStringHistoryAsync(
+        Guid projectId, Guid keyId, Guid localeId, CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<AuditEntryDto>>(
+            $"api/projects/{projectId}/keys/{keyId}/strings/{localeId}/history", ct);
+
     // ---- transport --------------------------------------------------
 
     private async Task<Result<T>> GetAsync<T>(string uri, CancellationToken ct)

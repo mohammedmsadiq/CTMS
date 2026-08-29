@@ -1,7 +1,22 @@
-<span class="badge @CssClass" title="Review state">@State</span>
+<span class="badge @CssClass text-nowrap" title="@($"Review state: {State}")">@Label</span>
 
 @code {
+    /// <summary>
+    /// One of the <see cref="ReviewStates"/> names (<c>Draft</c> / <c>NeedsReview</c> /
+    /// <c>Approved</c> / <c>Published</c>). Callers must bind an expression — remember the
+    /// leading <c>@</c> (<c>State="@dto.ReviewState"</c>); a bare <c>State="dto.ReviewState"</c>
+    /// passes the literal text, not the value.
+    /// </summary>
     [Parameter, EditorRequired] public string State { get; set; } = "";
+
+    private string Label => State switch
+    {
+        ReviewStates.Draft => "Draft",
+        ReviewStates.NeedsReview => "Needs review",
+        ReviewStates.Approved => "Approved",
+        ReviewStates.Published => "Published",
+        _ => string.IsNullOrWhiteSpace(State) ? "Unknown" : State,
+    };
 
     private string CssClass => State switch
     {

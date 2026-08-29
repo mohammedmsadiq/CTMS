@@ -71,6 +71,48 @@ public sealed record UpsertTranslationStringRequest(
     string? UpdatedBy = null,
     long? ExpectedVersion = null);
 
+// ---- Bundles ----------------------------------------------------------
+
+/// <summary>
+/// A published, immutable bundle snapshot (mirrors the API's <c>TranslationBundleDto</c>).
+/// <see cref="ETag"/> is the raw lowercase-hex SHA-256 content hash — the wire property is
+/// <c>eTag</c> under the camelCase policy.
+/// </summary>
+public sealed record BundleDto(
+    Guid Id,
+    Guid ProjectId,
+    string LocaleCode,
+    int Version,
+    IReadOnlyDictionary<string, string> Entries,
+    string ETag,
+    string CreatedBy,
+    DateTime CreatedAt);
+
+/// <summary>One row of a locale's publish history — no entries payload.</summary>
+public sealed record BundleVersionDto(
+    int Version,
+    string ETag,
+    DateTime CreatedAt,
+    string CreatedBy,
+    int EntryCount);
+
+/// <summary>Optional body for the publish endpoint; blank / omitted actor falls back to "system".</summary>
+public sealed record PublishBundleRequest(string? PublishedBy = null);
+
+// ---- History / audit trail -------------------------------------------
+
+public sealed record AuditEntryDto(
+    Guid Id,
+    Guid ProjectId,
+    string EntityType,
+    Guid EntityId,
+    string Action,
+    string Actor,
+    DateTime Timestamp,
+    string? FromState,
+    string? ToState,
+    string? Detail);
+
 // ---- Review workflow ----------------------------------------------------
 
 public sealed record ReviewRequest(string Action, string ReviewedBy);

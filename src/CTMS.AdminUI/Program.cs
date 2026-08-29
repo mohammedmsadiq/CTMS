@@ -1,5 +1,6 @@
 using CTMS.AdminUI.Auth;
 using CTMS.AdminUI.Components;
+using CTMS.AdminUI.Infrastructure;
 using CTMS.AdminUI.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -11,6 +12,11 @@ var builder = WebApplication.CreateBuilder(args);
 // Blazor Web App — InteractiveServer render mode only (internal admin tool).
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+// Data Protection key ring — shared across replicas via Redis when ConnectionStrings:Redis is
+// set, otherwise a local ephemeral ring (+ info log). Mirrors the API's DataProtectionSetup so
+// antiforgery tokens and the auth cookie survive a round-trip to a different replica.
+builder.AddCtmsDataProtection();
 
 // --- Authentication / authorization (WS7) -------------------------------------
 // Auth:Enabled (default true) selects the mode. false => a permissive all-roles bypass so the

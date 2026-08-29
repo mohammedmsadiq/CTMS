@@ -1,0 +1,30 @@
+@* Renders "from → to" review-state chips for an audit entry, with "—" for a missing side. *@
+@if (string.IsNullOrEmpty(From) && string.IsNullOrEmpty(To))
+{
+    <span class="text-muted">—</span>
+}
+else
+{
+    @if (!string.IsNullOrEmpty(From))
+    {
+        <ReviewStateBadge State="@From" />
+    }
+    else
+    {
+        <span class="text-muted">—</span>
+    }
+    <span class="mx-1" aria-hidden="true">→</span>
+    @if (!string.IsNullOrEmpty(To))
+    {
+        <ReviewStateBadge State="@To" />
+    }
+    else
+    {
+        <span class="text-muted">—</span>
+    }
+}
+
+@code {
+    [Parameter] public string? From { get; set; }
+    [Parameter] public string? To { get; set; }
+}
