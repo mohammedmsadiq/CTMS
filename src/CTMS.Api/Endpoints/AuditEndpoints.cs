@@ -1,3 +1,4 @@
+using CTMS.Api.Auth;
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Projects;
@@ -11,9 +12,11 @@ internal static class AuditEndpoints
 
     public static IEndpointRouteBuilder MapAuditEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. group.RequireAuthorization()).
-        var group = endpoints.MapGroup("/api/projects/{projectId:guid}").WithTags("History");
+        // Read-only audit trail: any recognised role (CanRead).
+        var group = endpoints
+            .MapGroup("/api/projects/{projectId:guid}")
+            .WithTags("History")
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/history", async (
                 Guid projectId,

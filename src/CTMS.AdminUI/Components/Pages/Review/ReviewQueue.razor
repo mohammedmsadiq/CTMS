@@ -1,4 +1,5 @@
 @page "/projects/{ProjectId:guid}/review"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject CurrentUser CurrentUser
 
@@ -60,14 +61,16 @@ else
                         <td class="text-truncate" style="max-width: 28rem;">@item.String.Value</td>
                         <td>@(string.IsNullOrWhiteSpace(item.String.UpdatedBy) ? "—" : item.String.UpdatedBy)</td>
                         <td class="text-end text-nowrap">
-                            <button class="btn btn-sm btn-outline-success" disabled="@_busyId.Equals(item.String.Id)"
-                                    @onclick="() => ReviewAsync(item, ReviewActions.Approve)">
-                                Approve
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" disabled="@_busyId.Equals(item.String.Id)"
-                                    @onclick="() => ReviewAsync(item, ReviewActions.Reject)">
-                                Reject
-                            </button>
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanReview" Context="review">
+                                <button class="btn btn-sm btn-outline-success" disabled="@_busyId.Equals(item.String.Id)"
+                                        @onclick="() => ReviewAsync(item, ReviewActions.Approve)">
+                                    Approve
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" disabled="@_busyId.Equals(item.String.Id)"
+                                        @onclick="() => ReviewAsync(item, ReviewActions.Reject)">
+                                    Reject
+                                </button>
+                            </AuthorizeView>
                         </td>
                     </tr>
                 }

@@ -1,3 +1,4 @@
+using CTMS.Api.Auth;
 using CTMS.Api.Infrastructure;
 using CTMS.Application.Translations;
 
@@ -9,20 +10,41 @@ internal static class BundleEndpoints
 
     public static IEndpointRouteBuilder MapBundleEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. group.RequireAuthorization()).
         var group = endpoints
             .MapGroup("/api/projects/{projectId:guid}/bundles")
             .WithTags("Bundles");
+
+        // The bundle GET routes are the SDK/CDN delivery path (WS6). By default they are
+        // anonymous so unauthenticated clients can pull published translations. Set
+        // Auth:PublicBundleReads=false to require CanRead on them instead.
+        var publicReads = endpoints.ServiceProvider
+            .GetRequiredService<IConfiguration>()
+            .PublicBundleReads();
+
+        static TReb GateReads<TReb>(TReb builder, bool publicReads) where TReb : IEndpointConventionBuilder
+        {
+            if (publicReads)
+            {
+                builder.AllowAnonymous();
+            }
+            else
+            {
+                builder.RequireAuthorization(AuthorizationPolicies.CanRead);
+            }
+
+            return builder;
+        }
 
         group.MapPost("/{localeCode}", async (
                 Guid projectId,
                 string localeCode,
                 PublishBundleRequest? request,
                 TranslationBundleService bundles,
+                HttpContext http,
                 CancellationToken cancellationToken) =>
             {
-                var publishedBy = string.IsNullOrWhiteSpace(request?.PublishedBy) ? SystemActor : request!.PublishedBy!;
+                // A real bearer token wins: the publisher is the token identity, not the body field.
+                var publishedBy = TokenActor.Resolve(http.User, request?.PublishedBy, SystemActor);
                 var bundle = await bundles.PublishAsync(projectId, localeCode, publishedBy, cancellationToken);
                 return Results.CreatedAtRoute(
                     "GetBundleByVersion",
@@ -33,14 +55,15 @@ internal static class BundleEndpoints
             .Produces<TranslationBundleDto>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .RequireAuthorization(AuthorizationPolicies.CanPublish);
 
         // Conditional GET: the latest bundle is fronted by Redis (in-memory fallback locally) and
         // carries a strong ETag. `Cache-Control: no-cache` lets a client store the response but
         // forces revalidation, which an `If-None-Match` turns into a cheap `304` (served straight
         // from the cache, no MongoDB round-trip). `.../versions` and `.../versions/{n}` stay
         // uncached and unconditioned.
-        group.MapGet("/{localeCode}", async (
+        GateReads(group.MapGet("/{localeCode}", async (
                 Guid projectId,
                 string localeCode,
                 TranslationBundleService bundles,
@@ -63,9 +86,9 @@ internal static class BundleEndpoints
             .WithName("GetLatestBundle")
             .Produces<TranslationBundleDto>()
             .Produces(StatusCodes.Status304NotModified)
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound), publicReads);
 
-        group.MapGet("/{localeCode}/versions", async (
+        GateReads(group.MapGet("/{localeCode}/versions", async (
                 Guid projectId,
                 string localeCode,
                 TranslationBundleService bundles,
@@ -76,9 +99,9 @@ internal static class BundleEndpoints
             })
             .WithName("ListBundleVersions")
             .Produces<IReadOnlyList<BundleVersionDto>>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound), publicReads);
 
-        group.MapGet("/{localeCode}/versions/{version:int}", async (
+        GateReads(group.MapGet("/{localeCode}/versions/{version:int}", async (
                 Guid projectId,
                 string localeCode,
                 int version,
@@ -90,7 +113,7 @@ internal static class BundleEndpoints
             })
             .WithName("GetBundleByVersion")
             .Produces<TranslationBundleDto>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound), publicReads);
 
         return endpoints;
     }

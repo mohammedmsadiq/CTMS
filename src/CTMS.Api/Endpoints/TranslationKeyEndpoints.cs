@@ -1,3 +1,4 @@
+using CTMS.Api.Auth;
 using CTMS.Application.Common;
 using CTMS.Application.Translations;
 
@@ -7,8 +8,7 @@ internal static class TranslationKeyEndpoints
 {
     public static IEndpointRouteBuilder MapTranslationKeyEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. group.RequireAuthorization()).
+        // Reads: any recognised role (CanRead). Mutations: admin/manager (CanManageContent).
         var group = endpoints.MapGroup("/api/projects/{projectId:guid}/keys").WithTags("Translation keys");
 
         group.MapGet("/", async (
@@ -19,7 +19,8 @@ internal static class TranslationKeyEndpoints
                 int take = 50) =>
                 Results.Ok(await keys.ListAsync(projectId, skip, take, cancellationToken)))
             .WithName("ListTranslationKeys")
-            .Produces<PagedResult<TranslationKeyDto>>();
+            .Produces<PagedResult<TranslationKeyDto>>()
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/{keyId:guid}", async (
                 Guid projectId,
@@ -32,7 +33,8 @@ internal static class TranslationKeyEndpoints
             })
             .WithName("GetTranslationKey")
             .Produces<TranslationKeyDto>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapPost("/", async (
                 Guid projectId,
@@ -47,7 +49,8 @@ internal static class TranslationKeyEndpoints
             .Produces<TranslationKeyDto>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         group.MapPatch("/{keyId:guid}", async (
                 Guid projectId,
@@ -61,7 +64,8 @@ internal static class TranslationKeyEndpoints
             })
             .WithName("UpdateTranslationKey")
             .Produces<TranslationKeyDto>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         group.MapDelete("/{keyId:guid}", async (
                 Guid projectId,
@@ -74,7 +78,8 @@ internal static class TranslationKeyEndpoints
             })
             .WithName("DeleteTranslationKey")
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         return endpoints;
     }

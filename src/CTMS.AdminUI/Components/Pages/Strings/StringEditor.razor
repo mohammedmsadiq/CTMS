@@ -1,4 +1,5 @@
 @page "/projects/{ProjectId:guid}/keys/{KeyId:guid}/strings"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject CurrentUser CurrentUser
 
@@ -90,36 +91,40 @@ else if (_key is not null)
                         }
 
                         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2">
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-primary"
-                                        disabled="@(row.Busy || !row.Dirty || string.IsNullOrEmpty(row.Draft))"
-                                        @onclick="() => SaveAsync(row)">
-                                    @if (row.Busy)
-                                    {
-                                        <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
-                                    }
-                                    Save
-                                </button>
-                                @if (row.Dirty)
-                                {
-                                    <button class="btn btn-sm btn-link" disabled="@row.Busy" @onclick="() => ResetDraft(row)">
-                                        Discard
-                                    </button>
-                                }
-                            </div>
-
-                            @if (row.Persisted is not null)
-                            {
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanEditStrings" Context="edit">
                                 <div class="btn-group">
-                                    @foreach (var (action, label) in ReviewActions.ForState(row.Persisted.ReviewState))
+                                    <button class="btn btn-sm btn-primary"
+                                            disabled="@(row.Busy || !row.Dirty || string.IsNullOrEmpty(row.Draft))"
+                                            @onclick="() => SaveAsync(row)">
+                                        @if (row.Busy)
+                                        {
+                                            <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                        }
+                                        Save
+                                    </button>
+                                    @if (row.Dirty)
                                     {
-                                        <button class="btn btn-sm btn-outline-secondary"
-                                                disabled="@row.Busy"
-                                                @onclick="() => ReviewAsync(row, action)">
-                                            @label
+                                        <button class="btn btn-sm btn-link" disabled="@row.Busy" @onclick="() => ResetDraft(row)">
+                                            Discard
                                         </button>
                                     }
                                 </div>
+                            </AuthorizeView>
+
+                            @if (row.Persisted is not null)
+                            {
+                                <AuthorizeView Policy="@AuthorizationPolicies.CanReview" Context="review">
+                                    <div class="btn-group">
+                                        @foreach (var (action, label) in ReviewActions.ForState(row.Persisted.ReviewState))
+                                        {
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                    disabled="@row.Busy"
+                                                    @onclick="() => ReviewAsync(row, action)">
+                                                @label
+                                            </button>
+                                        }
+                                    </div>
+                                </AuthorizeView>
                             }
                         </div>
 

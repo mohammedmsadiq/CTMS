@@ -1,8 +1,10 @@
+using CTMS.Api.Auth;
 using CTMS.Api.Endpoints;
 using CTMS.Api.Infrastructure;
 using CTMS.Application;
 using CTMS.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,12 +14,34 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApplicationExceptionHandler>();
 
+// Entra ID JWT bearer + the CTMS authorization policies (see CTMS.Api/Auth). When
+// Auth:Enabled=false (local dev / tests) a permissive all-roles bypass scheme is used instead.
+builder.AddCtmsAuth();
+
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Lets /swagger call secured endpoints: paste an Entra access token into "Authorize".
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Entra ID access token for the CTMS API. Enter the raw JWT — Swagger adds the \"Bearer \" prefix.",
+    });
+    options.AddSecurityRequirement(_ => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", hostDocument: null)] = new List<string>(),
+    });
+});
 
 // The MongoDB readiness check (name "database", tag "ready") is registered by AddInfrastructure.
 
 var app = builder.Build();
+
+app.WarnIfAuthDisabled();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
@@ -38,10 +62,11 @@ if (HttpsRedirectConfigured(builder.Configuration))
     app.UseHttpsRedirection();
 }
 
-// TODO: auth — add authentication/authorization here. Expected: JWT bearer.
-// Register the scheme(s) above with builder.Services.AddAuthentication(...).AddJwtBearer(...)
-// and builder.Services.AddAuthorization(), then call app.UseAuthentication() and
-// app.UseAuthorization() at this point in the pipeline, and protect the /api/* endpoints.
+// Auth sits between the guarded UseHttpsRedirection block and the health checks. Registration
+// happened in builder.AddCtmsAuth(); the /api/* groups carry .RequireAuthorization("<policy>").
+// /health, /health/ready and Swagger are outside any guarded group and stay anonymous.
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions

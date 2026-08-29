@@ -1,3 +1,4 @@
+using CTMS.Api.Auth;
 using CTMS.Application.Common;
 using CTMS.Application.Translations;
 
@@ -7,17 +8,15 @@ internal static class TranslationStringEndpoints
 {
     public static IEndpointRouteBuilder MapTranslationStringEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. group.RequireAuthorization()).
+        // Reads: any recognised role (CanRead). Upsert: translator and up (CanEditStrings).
         var group = endpoints
             .MapGroup("/api/projects/{projectId:guid}/keys/{keyId:guid}/strings")
             .WithTags("Translation strings");
 
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. projectGroup.RequireAuthorization()).
         var projectGroup = endpoints
             .MapGroup("/api/projects/{projectId:guid}/strings")
-            .WithTags("Translation strings");
+            .WithTags("Translation strings")
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         projectGroup.MapGet("/", async (
                 Guid projectId,
@@ -46,7 +45,8 @@ internal static class TranslationStringEndpoints
             })
             .WithName("ListTranslationStrings")
             .Produces<IReadOnlyList<TranslationStringDto>>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/{localeId:guid}", async (
                 Guid projectId,
@@ -60,7 +60,8 @@ internal static class TranslationStringEndpoints
             })
             .WithName("GetTranslationString")
             .Produces<TranslationStringDto>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapPut("/{localeId:guid}", async (
                 Guid projectId,
@@ -68,9 +69,15 @@ internal static class TranslationStringEndpoints
                 Guid localeId,
                 UpsertTranslationStringRequest request,
                 TranslationStringService strings,
+                HttpContext http,
                 CancellationToken cancellationToken) =>
             {
-                var result = await strings.UpsertAsync(projectId, keyId, localeId, request, cancellationToken);
+                // A real bearer token wins: the actor is the token identity, the body field is ignored.
+                var effective = request with
+                {
+                    UpdatedBy = TokenActor.Resolve(http.User, request.UpdatedBy, request.UpdatedBy ?? string.Empty),
+                };
+                var result = await strings.UpsertAsync(projectId, keyId, localeId, effective, cancellationToken);
                 return result.Created
                     ? Results.CreatedAtRoute("GetTranslationString", new { projectId, keyId, localeId }, result.String)
                     : Results.Ok(result.String);
@@ -80,7 +87,8 @@ internal static class TranslationStringEndpoints
             .Produces<TranslationStringDto>()
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .RequireAuthorization(AuthorizationPolicies.CanEditStrings);
 
         return endpoints;
     }

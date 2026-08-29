@@ -10,6 +10,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- CTMS.Api is a Microsoft.NET.Sdk.Web project; a non-web test project needs the shared
+         framework reference to see its ASP.NET types (authorization runtime, DefaultHttpContext). -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\CTMS.Api\CTMS.Api.csproj" />
     <ProjectReference Include="..\..\src\CTMS.Application\CTMS.Application.csproj" />
     <ProjectReference Include="..\..\src\CTMS.Infrastructure\CTMS.Infrastructure.csproj" />

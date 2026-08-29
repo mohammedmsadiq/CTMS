@@ -1,3 +1,4 @@
+using CTMS.Api.Auth;
 using CTMS.Application.Translations;
 
 namespace CTMS.Api.Endpoints;
@@ -6,11 +7,12 @@ internal static class ReviewEndpoints
 {
     public static IEndpointRouteBuilder MapReviewEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. group.RequireAuthorization()).
+        // All review transitions — submit/approve/reject/reopen and the `publish` action —
+        // require CanReview (admin/manager/reviewer). Bundle publication is separate (CanPublish).
         var group = endpoints
             .MapGroup("/api/projects/{projectId:guid}/keys/{keyId:guid}/strings/{localeId:guid}/review")
-            .WithTags("Review");
+            .WithTags("Review")
+            .RequireAuthorization(AuthorizationPolicies.CanReview);
 
         group.MapPost("/", async (
                 Guid projectId,
@@ -18,14 +20,18 @@ internal static class ReviewEndpoints
                 Guid localeId,
                 ReviewRequest request,
                 TranslationStringService strings,
+                HttpContext http,
                 CancellationToken cancellationToken) =>
             {
+                // A real bearer token wins: the reviewer is the token identity, not the body field.
+                var reviewedBy = TokenActor.Resolve(http.User, request.ReviewedBy, request.ReviewedBy);
+
                 var reviewed = await strings.ReviewAsync(
                     projectId,
                     keyId,
                     localeId,
                     request.Action,
-                    request.ReviewedBy,
+                    reviewedBy,
                     cancellationToken);
 
                 return reviewed is null ? Results.NotFound() : Results.Ok(reviewed);

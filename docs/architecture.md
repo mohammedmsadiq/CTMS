@@ -54,9 +54,9 @@ flowchart LR
 | **CTMS.Infrastructure** | Data access. `AddInfrastructure(IConfiguration)` wires the Mongo client/context, the six repositories, `NoOpUnitOfWork`, the readiness health check, and two hosted startup services. | `CtmsMongoContext` / `IMongoContext`, `MongoMappingRegistration`, `MongoOptions`, `EntityStamps`, `NoOpUnitOfWork`, `MongoWriteExceptions`, `Persistence/Repositories/*Repository`, `MongoHealthCheck`, `MongoIndexInitializer`, `DataSeeder` |
 | **CTMS.Api** | Minimal-API host. Composition root only - it references Infrastructure solely to call `AddInfrastructure`. Endpoints grouped per resource; known exceptions become RFC 7807 ProblemDetails via `ApplicationExceptionHandler`. | `Program.cs`, `Endpoints/*Endpoints.cs`, `Infrastructure/ApplicationExceptionHandler.cs` |
 
-There is **no authentication yet** - each endpoint group carries a `// TODO: auth`
-marker where `RequireAuthorization()` will go, and `Program.cs` documents the
-expected JWT-bearer wiring. _(planned)_
+Authentication and role-based authorization are wired (Microsoft Entra ID / JWT
+bearer) - see [§10 Security](#10-security). Every `/api/*` endpoint carries a
+named authorization policy; `/health` and Swagger are anonymous.
 
 ---
 
@@ -307,6 +307,9 @@ Published bundles are read-heavy and immutable - a good cache fit.
 | `ConnectionStrings:Redis` | `ConnectionStrings__Redis` | Redis connection string | `redis:6379` (compose) |
 | `Seed:Enabled` | `Seed__Enabled` | Run the dev data seeder on startup _(planned)_ | `true` in compose; set `false` for staging/prod |
 | `ASPNETCORE_ENVIRONMENT` | (same) | `Development` enables Swagger (and the seeder) | `Development` |
+| `AzureAd:Instance` / `:TenantId` / `:ClientId` / `:Audience` | `AzureAd__*` | Entra ID app registration for JWT-bearer validation (§10) | placeholders; set in user-secrets / Key Vault |
+| `Auth:Enabled` | `Auth__Enabled` | `false` = permissive all-roles bypass (local/tests). Refused under `Production`. | `false` in `appsettings.Development.json`, else `true` |
+| `Auth:PublicBundleReads` | `Auth__PublicBundleReads` | `true` = bundle delivery GETs are anonymous; `false` = require `CanRead` | `true` |
 
 - Config binds `appsettings.json` -> `appsettings.{Environment}.json` ->
   environment variables (`__` maps to `:`).
@@ -344,3 +347,64 @@ end against real repositories on a real MongoDB; `ReviewWorkflowTests` drives th
   at the time of writing.
 
 Build is warnings-as-errors (`Directory.Build.props`), so any warning fails CI.
+
+- WS7 adds focused unit tests: `AuthorizationPoliciesTests` drives the real
+  authorization runtime built from `AuthorizationPolicies.Configure` for every
+  `(role, policy)` pair, and `TokenActorTests` covers the actor-from-token
+  helper. The test project gains a `FrameworkReference` to
+  `Microsoft.AspNetCore.App` (needed to see the API's ASP.NET types) but still
+  no `WebApplicationFactory` — see `AuthorizationPoliciesTests` for why.
+
+---
+
+## 10. Security
+
+Authentication is **Microsoft Entra ID**; authorization is **role-based** via
+named policies. `Microsoft.Identity.Web` (3.15.1) on both the API and the
+Admin UI.
+
+```mermaid
+sequenceDiagram
+    actor U as User (browser)
+    participant UI as CTMS.AdminUI (Blazor Server)
+    participant AAD as Entra ID
+    participant API as CTMS.Api
+
+    U->>UI: open a page
+    UI->>AAD: OpenID Connect sign-in (AddMicrosoftIdentityWebApp)
+    AAD-->>UI: id_token + code -> tokens cached (in-memory)
+    U->>UI: act on a screen
+    UI->>AAD: token for API scope (ITokenAcquisition, on-behalf-of user)
+    UI->>API: request + Authorization: Bearer <access_token><br/>(CtmsApiTokenHandler DelegatingHandler)
+    API->>API: validate JWT (AddMicrosoftIdentityWebApi), read roles claim
+    API->>API: evaluate endpoint policy (CanRead / CanEditStrings / ...)
+    API-->>UI: 200 / 401 / 403
+```
+
+### App roles → policies
+
+Five Entra app roles (`ctms.admin`, `ctms.manager`, `ctms.reviewer`,
+`ctms.translator`, `ctms.reader`) map to six policies (`CanRead`,
+`CanEditStrings`, `CanReview`, `CanManageContent`, `CanPublish`,
+`CanAdminProjects`). An authenticated principal with **no** recognised role
+satisfies no policy (`403` everywhere except `/health` / Swagger). The full
+matrix is in [api.md → Authentication & authorization](api.md#authentication--authorization).
+
+### Where it is defined
+
+| Concern | Location |
+|---------|----------|
+| Role name constants | `src/CTMS.Api/Auth/AuthRoles.cs` (mirror: `src/CTMS.AdminUI/Auth/AuthRoles.cs`) |
+| Role → policy mapping (single source) | `src/CTMS.Api/Auth/AuthorizationPolicies.cs` (mirror in `CTMS.AdminUI/Auth`) |
+| API auth wiring + Production guard | `src/CTMS.Api/Auth/AuthenticationSetup.cs` (`builder.AddCtmsAuth()`) |
+| Endpoint policy assignment | `.RequireAuthorization("<policy>")` in each `src/CTMS.Api/Endpoints/*.cs` |
+| Actor-from-token | `src/CTMS.Api/Auth/TokenActor.cs`, called from the string-upsert / review / bundle-publish endpoints |
+| Local-dev bypass | `DevBypassAuthHandler` in each project's `Auth/` folder (`Auth:Enabled=false`) |
+| Admin UI token acquisition | `src/CTMS.AdminUI/Services/CtmsApiTokenHandler.cs` (scope `Ctms:ApiScope`) |
+| Admin UI claims accessor / role gating | `src/CTMS.AdminUI/Services/CurrentUser.cs`, `<AuthorizeView Policy="...">` in pages |
+
+The API↔UI token flow: the UI holds only user tokens (in-memory cache, no
+persistence); each outbound API call gets a freshly-acquired access token for
+the `Ctms:ApiScope` audience. The API trusts nothing but the validated JWT — the
+`updatedBy` / `reviewedBy` / `publishedBy` body fields are overridden with the
+token identity whenever a real token is present.

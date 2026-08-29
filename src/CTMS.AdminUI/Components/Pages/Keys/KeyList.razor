@@ -1,5 +1,6 @@
 @page "/projects/{ProjectId:guid}/keys"
 @using System.ComponentModel.DataAnnotations
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject NavigationManager Nav
 
@@ -15,9 +16,11 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3 mb-0">Translation keys</h1>
-    <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
-        @(_showCreate ? "Close" : "New key")
-    </button>
+    <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent">
+        <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "Close" : "New key")
+        </button>
+    </AuthorizeView>
 </div>
 
 @if (_showCreate)
@@ -89,17 +92,19 @@ else if (_page is not null)
                             }
                         </td>
                         <td class="text-end text-nowrap">
-                            @if (editing)
-                            {
-                                <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(key)" disabled="@_saving">Save</button>
-                                <button class="btn btn-sm btn-link" @onclick="() => _editingId = null" disabled="@_saving">Cancel</button>
-                            }
-                            else
-                            {
-                                <a class="btn btn-sm btn-outline-primary" href="@($"projects/{ProjectId}/keys/{key.Id}/strings")">Edit values</a>
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(key)">Description</button>
-                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = key">Delete</button>
-                            }
+                            <a class="btn btn-sm btn-outline-primary" href="@($"projects/{ProjectId}/keys/{key.Id}/strings")">Edit values</a>
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
+                                @if (editing)
+                                {
+                                    <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(key)" disabled="@_saving">Save</button>
+                                    <button class="btn btn-sm btn-link" @onclick="() => _editingId = null" disabled="@_saving">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(key)">Description</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = key">Delete</button>
+                                }
+                            </AuthorizeView>
                         </td>
                     </tr>
                 }

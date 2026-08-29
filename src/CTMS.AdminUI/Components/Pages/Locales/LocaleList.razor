@@ -1,5 +1,6 @@
 @page "/projects/{ProjectId:guid}/locales"
 @using System.ComponentModel.DataAnnotations
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 
 <PageTitle>Locales — CTMS Admin</PageTitle>
@@ -14,9 +15,11 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3 mb-0">Locales</h1>
-    <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
-        @(_showCreate ? "Close" : "Add locale")
-    </button>
+    <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent">
+        <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "Close" : "Add locale")
+        </button>
+    </AuthorizeView>
 </div>
 
 @if (_showCreate)
@@ -102,16 +105,18 @@ else if (_locales is not null)
                             }
                         </td>
                         <td class="text-end text-nowrap">
-                            @if (editing)
-                            {
-                                <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(locale)" disabled="@_saving">Save</button>
-                                <button class="btn btn-sm btn-link" @onclick="CancelEdit" disabled="@_saving">Cancel</button>
-                            }
-                            else
-                            {
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(locale)">Edit</button>
-                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = locale">Delete</button>
-                            }
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
+                                @if (editing)
+                                {
+                                    <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(locale)" disabled="@_saving">Save</button>
+                                    <button class="btn btn-sm btn-link" @onclick="CancelEdit" disabled="@_saving">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(locale)">Edit</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = locale">Delete</button>
+                                }
+                            </AuthorizeView>
                         </td>
                     </tr>
                 }

@@ -111,9 +111,42 @@ serialized `TranslationBundleDto` under `ctms:bundle:{projectId}:{localeCode}:la
 code trimmed + lower-cased); TTL is `Cache:BundleTtlMinutes` (default 60). Only present bundles
 are cached (no negative caching); a cache backend failure is logged and treated as a miss.
 
+### Authentication & authorization (WS7)
+
+Microsoft Entra ID, `Microsoft.Identity.Web` 3.15.1 on both the API and the Admin UI.
+
+- **API** validates JWT bearer tokens (`AddMicrosoftIdentityWebApi`, config section `AzureAd`).
+  Every `/api/*` endpoint has `.RequireAuthorization("<policy>")`; `/health`, `/health/ready`
+  and Swagger are anonymous.
+- **Admin UI** signs users in with OpenID Connect (`AddMicrosoftIdentityWebApp`) and calls the
+  API with a user bearer token via the `CtmsApiTokenHandler` DelegatingHandler (scope from
+  `Ctms:ApiScope`).
+- **Roles** (Entra app-role `roles` claim): `ctms.admin`, `ctms.manager`, `ctms.reviewer`,
+  `ctms.translator`, `ctms.reader`. An authenticated principal with none of these gets `403`
+  everywhere except `/health` / Swagger.
+- **Policies** (defined once in `src/CTMS.Api/Auth/AuthorizationPolicies.cs`, mirrored in
+  `src/CTMS.AdminUI/Auth/`): `CanRead`, `CanEditStrings`, `CanReview`, `CanManageContent`,
+  `CanPublish`, `CanAdminProjects`. Full role→policy→endpoint matrix in `docs/api.md`.
+- **Actor fields** — `updatedBy` / `reviewedBy` / `publishedBy` in request bodies are ignored
+  when a real bearer token is present; the actor is the token identity (`name`, then
+  `preferred_username`, then `oid`). Helper: `src/CTMS.Api/Auth/TokenActor.cs`.
+
+Config keys (placeholders committed; real values via user-secrets / Key Vault):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `AzureAd:Instance` / `:TenantId` / `:ClientId` / `:Audience` (API) | placeholders | Entra app registration for token validation |
+| `AzureAd:Instance` / `:TenantId` / `:ClientId` / `:CallbackPath` (UI) | placeholders | Entra app registration for OIDC sign-in |
+| `Ctms:ApiScope` (UI) | placeholder | Downstream API scope, e.g. `api://<api-client-id>/access_as_user` |
+| `Auth:Enabled` | `true` (both); `false` in `appsettings.Development.json` | `false` = permissive **dev bypass**: every request is a synthetic principal with **all** roles, no IdP needed. Throws at startup under `Production`. |
+| `Auth:PublicBundleReads` (API) | `true` | `true` = bundle **delivery** GET routes are `AllowAnonymous` (SDK/CDN path); `false` = require `CanRead`. Bundle publish is always `CanPublish`. |
+
+`dotnet run` and `dotnet test` work with no Entra tenant because Development sets
+`Auth:Enabled=false`.
+
 ### API surface
 
-Each `/api/*` group carries a `// TODO: auth` marker where `RequireAuthorization()` will go.
+Each `/api/*` group is guarded with `.RequireAuthorization("<policy>")` (see above).
 Known application/domain exceptions become RFC 7807 ProblemDetails in
 `ApplicationExceptionHandler`: `ValidationException`→400, `NotFoundException`→404,
 `SlugAlreadyInUseException`/`ConflictException`/`ConcurrencyException`/

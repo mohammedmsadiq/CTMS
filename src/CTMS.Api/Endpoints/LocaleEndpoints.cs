@@ -1,3 +1,4 @@
+using CTMS.Api.Auth;
 using CTMS.Application.Locales;
 
 namespace CTMS.Api.Endpoints;
@@ -6,14 +7,14 @@ internal static class LocaleEndpoints
 {
     public static IEndpointRouteBuilder MapLocaleEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // TODO: auth — require an authenticated principal on this group once auth exists
-        // (e.g. group.RequireAuthorization()).
+        // Reads: any recognised role (CanRead). Mutations: admin/manager (CanManageContent).
         var group = endpoints.MapGroup("/api/projects/{projectId:guid}/locales").WithTags("Locales");
 
         group.MapGet("/", async (Guid projectId, LocaleService locales, CancellationToken cancellationToken) =>
                 Results.Ok(await locales.ListAsync(projectId, cancellationToken)))
             .WithName("ListLocales")
-            .Produces<IReadOnlyList<LocaleDto>>();
+            .Produces<IReadOnlyList<LocaleDto>>()
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/{localeId:guid}", async (
                 Guid projectId,
@@ -26,7 +27,8 @@ internal static class LocaleEndpoints
             })
             .WithName("GetLocale")
             .Produces<LocaleDto>()
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapPost("/", async (
                 Guid projectId,
@@ -41,7 +43,8 @@ internal static class LocaleEndpoints
             .Produces<LocaleDto>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         group.MapPatch("/{localeId:guid}", async (
                 Guid projectId,
@@ -56,7 +59,8 @@ internal static class LocaleEndpoints
             .WithName("UpdateLocale")
             .Produces<LocaleDto>()
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         group.MapDelete("/{localeId:guid}", async (
                 Guid projectId,
@@ -69,7 +73,8 @@ internal static class LocaleEndpoints
             })
             .WithName("DeleteLocale")
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         return endpoints;
     }

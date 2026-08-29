@@ -9,11 +9,18 @@
         <div class="top-row px-4">
             <span class="app-title">CTMS Admin</span>
             <div class="flex-grow-1"></div>
-            @* TODO: WS7 auth — replace this static stub with the real signed-in user / sign-out menu. *@
-            <span class="user-stub" title="Authentication is not wired yet (WS7)">
-                <span class="bi bi-person-circle" aria-hidden="true"></span>
-                @CurrentUser.DisplayName
-            </span>
+            <AuthorizeView>
+                <Authorized>
+                    <span class="user-stub">
+                        <span class="bi bi-person-circle" aria-hidden="true"></span>
+                        @(context.User.Identity?.Name ?? CurrentUser.DisplayName)
+                    </span>
+                    <a class="ms-3 small" href="MicrosoftIdentity/Account/SignOut">Sign out</a>
+                </Authorized>
+                <NotAuthorized>
+                    <a class="small" href="MicrosoftIdentity/Account/SignIn">Sign in</a>
+                </NotAuthorized>
+            </AuthorizeView>
         </div>
 
         <article class="content px-4">

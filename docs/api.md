@@ -8,8 +8,14 @@ can cross-reference `src/CTMS.Application`.
 - Base URL in local dev: `http://localhost:5147` (Swagger UI at `/swagger` in
   the `Development` environment). In the container / compose it is
   `http://localhost:8080`.
-- **No authentication yet.** Each `/api/*` group has a `// TODO: auth` marker
-  where `RequireAuthorization()` will be added (expected scheme: JWT bearer).
+- **Authentication is required** (Microsoft Entra ID, JWT bearer). Every `/api/*`
+  endpoint carries an authorization policy; see
+  [Authentication & authorization](#authentication--authorization). `/health`,
+  `/health/ready` and Swagger are anonymous, and the bundle **delivery** GET
+  routes are anonymous by default (`Auth:PublicBundleReads`).
+- A local-dev / test escape hatch (`Auth:Enabled=false`) authenticates every
+  request as a synthetic all-roles principal so `dotnet run` and the test suite
+  work with no identity provider. It is refused under `Production`.
 - IDs in the path are GUIDs (`{id:guid}` route constraint) - a non-GUID segment
   is a route miss (`404`), not a `400`.
 
@@ -33,6 +39,90 @@ Known application/domain exceptions are translated by
 and surfaces as a normal `500`. (The EF-era `DbUpdateConcurrencyException` branch
 has been removed with the MongoDB switch - the string repository now throws
 `ConcurrencyException` directly, carrying the stored `Version`.)
+
+---
+
+## Authentication & authorization
+
+### Bearer requirement
+
+The API authenticates **Microsoft Entra ID** access tokens as JWT bearer
+(`Authorization: Bearer <token>`), wired with `Microsoft.Identity.Web`
+(`AddMicrosoftIdentityWebApi`, config section `AzureAd`). A request with no / an
+invalid token to a protected endpoint gets `401`. An authenticated caller whose
+token carries **no recognised role** gets `403` on every `/api/*` endpoint
+(there is no implicit read access).
+
+Roles come from the token's `roles` claim (Entra **app roles**):
+
+| Role | Intended for | Grants |
+|------|--------------|--------|
+| `ctms.admin` | Administrators | Everything, incl. create projects |
+| `ctms.manager` | Project managers | Manage locales & keys, publish bundles, + all reviewer/translator rights |
+| `ctms.reviewer` | Reviewers | Review transitions (approve/reject/reopen/publish action), edit strings, read |
+| `ctms.translator` | Translators | Create/edit string values, submit for review, read |
+| `ctms.reader` | Read-only clients | Every GET |
+
+### Policies
+
+Endpoints reference **named policies**, never raw roles. The mapping lives in one
+place — `AuthorizationPolicies` (`src/CTMS.Api/Auth/AuthorizationPolicies.cs`);
+the Admin UI keeps a byte-identical copy.
+
+| Policy | Satisfied by roles |
+|--------|--------------------|
+| `CanRead` | admin, manager, reviewer, translator, reader |
+| `CanEditStrings` | admin, manager, reviewer, translator |
+| `CanReview` | admin, manager, reviewer |
+| `CanManageContent` | admin, manager |
+| `CanPublish` | admin, manager |
+| `CanAdminProjects` | admin |
+
+### Endpoint → policy matrix
+
+| Endpoint | Policy |
+|----------|--------|
+| `GET /api/projects`, `GET /api/projects/{id}` | `CanRead` |
+| `POST /api/projects` | `CanAdminProjects` |
+| `GET .../locales`, `GET .../locales/{id}` | `CanRead` |
+| `POST/PATCH/DELETE .../locales[...]` | `CanManageContent` |
+| `GET .../keys`, `GET .../keys/{id}` | `CanRead` |
+| `POST/PATCH/DELETE .../keys[...]` | `CanManageContent` |
+| `GET .../keys/{keyId}/strings[...]`, `GET .../projects/{id}/strings` | `CanRead` |
+| `PUT .../keys/{keyId}/strings/{localeId}` (upsert) | `CanEditStrings` |
+| `POST .../strings/{localeId}/review` (submit/approve/reject/reopen/**publish** action) | `CanReview` |
+| `POST /api/projects/{id}/bundles/{localeCode}` (publish a bundle) | `CanPublish` |
+| `GET .../bundles/{localeCode}`, `.../versions`, `.../versions/{n}` | anonymous by default — see below |
+| `GET .../history`, `GET .../keys/.../history` | `CanRead` |
+| `GET /health`, `GET /health/ready`, `/swagger` | anonymous |
+
+The review `publish` action (`Approved → Published` on a single string) is part
+of the review workflow and needs `CanReview`; cutting a **bundle**
+(`POST .../bundles/...`) is a separate step and needs `CanPublish`.
+
+### `Auth:PublicBundleReads` (default `true`)
+
+The three bundle **GET** routes are the SDK / CDN delivery path (client-devops
+WS6), which must work for unauthenticated clients. While
+`Auth:PublicBundleReads` is `true` they are `AllowAnonymous`. Set it to `false`
+to require `CanRead` on them instead (e.g. a fully private deployment). Bundle
+**publication** (`POST`) always requires `CanPublish` regardless of this flag.
+
+### `Auth:Enabled` (default `true`) — local-dev / test escape hatch
+
+With `Auth:Enabled=false` (set in `appsettings.Development.json`) the JWT scheme
+is replaced by a permissive handler that authenticates **every** request as a
+synthetic principal (`dev-bypass`) holding **all** roles, so `dotnet run` and the
+84+ tests need no IdP. A loud warning is logged at startup. `Auth:Enabled=false`
+is **refused at startup** when `ASPNETCORE_ENVIRONMENT=Production`.
+
+### Actor fields are taken from the token
+
+`updatedBy` (string upsert), `reviewedBy` (review), and `publishedBy` (bundle
+publish) in the request body are **ignored when the caller presents a real
+bearer token** — the actor recorded in the row and the audit trail is the token
+identity (`name` claim, then `preferred_username`, then `oid`). The body field
+still works when auth is disabled or the request is anonymous (bundle reads).
 
 ---
 
