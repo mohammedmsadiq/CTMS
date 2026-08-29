@@ -8,6 +8,9 @@ using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Human-readable console in Development, built-in JSON console elsewhere; trace id on every scope.
+builder.AddCtmsLogging();
+
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
@@ -17,6 +20,18 @@ builder.Services.AddExceptionHandler<ApplicationExceptionHandler>();
 // Entra ID JWT bearer + the CTMS authorization policies (see CTMS.Api/Auth). When
 // Auth:Enabled=false (local dev / tests) a permissive all-roles bypass scheme is used instead.
 builder.AddCtmsAuth();
+
+// Cross-origin policy "ctms" (empty Cors:AllowedOrigins ⇒ no cross-origin access), a global
+// partitioned rate limiter (off when RateLimit:Enabled=false), and a Redis-backed Data
+// Protection key ring (local ephemeral fallback when ConnectionStrings:Redis is unset).
+builder.Services.AddCtmsCors(builder.Configuration);
+builder.Services.AddCtmsRateLimiting(builder.Configuration);
+builder.AddCtmsDataProtection();
+
+// Cap the request body for the whole host. The middleware (added below) enforces the same
+// ceiling on hosting models that ignore this Kestrel limit, e.g. the integration test server.
+builder.WebHost.ConfigureKestrel(options =>
+    options.Limits.MaxRequestBodySize = builder.Configuration.MaxRequestBodyBytes());
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -46,6 +61,12 @@ app.WarnIfAuthDisabled();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
+// Reject oversized bodies with 413 before anything reads them.
+app.UseCtmsRequestBodySizeLimit(app.Configuration.MaxRequestBodyBytes());
+
+// One structured line per request (method, path, status, elapsed); /health* excluded.
+app.UseCtmsHttpLogging();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -62,17 +83,27 @@ if (HttpsRedirectConfigured(builder.Configuration))
     app.UseHttpsRedirection();
 }
 
+// CORS runs before auth so an unauthenticated preflight is answered correctly.
+app.UseCors(CorsSetup.PolicyName);
+
 // Auth sits between the guarded UseHttpsRedirection block and the health checks. Registration
 // happened in builder.AddCtmsAuth(); the /api/* groups carry .RequireAuthorization("<policy>").
 // /health, /health/ready and Swagger are outside any guarded group and stay anonymous.
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
+// After auth so the limiter can partition by the authenticated user id (remote IP otherwise).
+if (app.Configuration.RateLimitingEnabled())
+{
+    app.UseRateLimiter();
+}
+
+app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false })
+    .DisableRateLimiting();
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = registration => registration.Tags.Contains("ready"),
-});
+}).DisableRateLimiting();
 
 app.MapProjectEndpoints();
 app.MapLocaleEndpoints();

@@ -42,3 +42,15 @@ deploy/
 *.md
 !README.md
 LICENSE
+
+# The runtime image only builds the CTMS.Api project graph
+# (Api -> Application -> Domain, Infrastructure). Everything below is outside
+# that graph — keeping it out of the build context makes `docker build` faster
+# and the layer cache tighter.
+.github/
+.azuredevops/
+azure-pipelines.yml
+samples/
+tests/
+src/CTMS.AdminUI/
+src/CTMS.Client*/

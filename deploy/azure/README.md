@@ -18,7 +18,7 @@ Apps. It compiles (`az bicep build`) but has not been deployed; treat every
 | Azure Cache for Redis | `Microsoft.Cache/redis` | Basic C0, TLS 1.2, non-SSL port disabled. |
 | Log Analytics workspace | `Microsoft.OperationalInsights/workspaces` | Backing store for Container Apps logs. |
 | Container Apps environment | `Microsoft.App/managedEnvironments` | Wired to the Log Analytics workspace. |
-| API container app | `Microsoft.App/containerApps` | External ingress on port **8080**, HTTP scale rule, `/health` liveness + `/health/ready` readiness probes. |
+| API container app | `Microsoft.App/containerApps` | External ingress on port **8080**, HTTP scale rule, `/health` liveness + `/health/ready` readiness probes. Rate limiting on; CORS + Entra ID env emitted when the matching params are supplied. |
 
 ## Configuration contract
 
@@ -28,10 +28,15 @@ The container app sets these environment variables (ASP.NET Core config keys):
 |---|---|---|
 | `ConnectionStrings__CtmsDatabase` | `ConnectionStrings:CtmsDatabase` | Key Vault secret `CtmsDatabase-ConnectionString` |
 | `Mongo__Database` | `Mongo:Database` | `mongoDatabaseName` parameter (plain value) |
-| `ConnectionStrings__Redis` | `ConnectionStrings:Redis` | Key Vault secret `Redis-ConnectionString` |
+| `ConnectionStrings__Redis` | `ConnectionStrings:Redis` | Key Vault secret `Redis-ConnectionString`. Backs **both** the bundle cache **and** the Data Protection key ring (shared across replicas). |
 | `ASPNETCORE_ENVIRONMENT` | — | `Staging` for non-prod, `Production` for prod |
 | `ASPNETCORE_URLS` | — | `http://+:8080` (TLS terminated at ingress) |
 | `Seed__Enabled` | `Seed:Enabled` | `false` |
+| `RateLimit__Enabled` | `RateLimit:Enabled` | `true` (always). Tune `RateLimit:PermitPerWindow` / `WindowSeconds` / `QueueLimit` / `BundlePermitPerWindow` via app config if needed. |
+| `Cors__AllowedOrigins__0` | `Cors:AllowedOrigins[0]` | `allowedOrigin` parameter — **omitted entirely when the param is empty**, and then the API allows no cross-origin request. |
+| `AzureAd__Instance` / `AzureAd__TenantId` / `AzureAd__ClientId` / `AzureAd__Audience` | `AzureAd:*` | `azureAd*` parameters (plain, non-secret) — the whole block is **omitted when `azureAdTenantId` is empty**, and the image then falls back to its appsettings `AzureAd` section. |
+
+Auth is **on** in Azure by the image's `appsettings.json` default (`Auth:Enabled=true`) because `ASPNETCORE_ENVIRONMENT` is `Staging`/`Production`; the Bicep never sets `Auth__Enabled`.
 
 ## Secrets expected in Key Vault
 
@@ -42,7 +47,7 @@ app's next revision starts):
 | Secret name | Value |
 |---|---|
 | `CtmsDatabase-ConnectionString` | Mongo connection string. RU: primary connection string from the Cosmos account (`az cosmosdb keys list --type connection-strings`). vCore: the cluster connection string with the admin password substituted in. |
-| `Redis-ConnectionString` | `<redisHostName>:6380,password=<primaryKey>,ssl=True,abortConnect=False` (StackExchange.Redis format). |
+| `Redis-ConnectionString` | `<redisHostName>:6380,password=<primaryKey>,ssl=True,abortConnect=False` (StackExchange.Redis format). Used for the bundle cache and the Data Protection key ring. |
 
 ```bash
 az keyvault secret set --vault-name <keyVaultName> \
@@ -51,6 +56,12 @@ az keyvault secret set --vault-name <keyVaultName> \
 az keyvault secret set --vault-name <keyVaultName> \
   --name Redis-ConnectionString --value "<host>:6380,password=<key>,ssl=True,abortConnect=False"
 ```
+
+**The API needs no Entra ID client secret.** It is a bearer-token *validator*:
+`azureAdTenantId` / `azureAdClientId` / `azureAdAudience` are plain container-app
+env, not secrets. The only Entra ID *client secret* in the system belongs to the
+Admin UI (confidential client) and is a separate Key Vault secret,
+`AdminUi-AzureAdClientSecret`, owned by the Admin UI deployment — not wired here.
 
 Rotating a secret: set a new version, then restart the container app revision
 (`az containerapp revision restart`) so the reference re-resolves.
@@ -77,6 +88,9 @@ Rotating a secret: set a new version, then restart the container app revision
 az group create --name rg-ctms-dev --location westeurope
 
 # 2. Infrastructure
+#    Fill in allowedOrigin + azureAd* in parameters.example.json (or pass them
+#    with --parameters key=value) before a real environment — leaving them empty
+#    ships the API with no CORS allow-list and the appsettings AzureAd fallback.
 az deployment group create \
   --resource-group rg-ctms-dev \
   --template-file deploy/azure/main.bicep \

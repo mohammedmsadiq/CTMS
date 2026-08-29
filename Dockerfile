@@ -44,11 +44,24 @@ ENV ASPNETCORE_URLS=http://+:8080 \
 # Make sure no base-image default forces an HTTPS binding.
 ENV ASPNETCORE_HTTPS_PORTS=
 
+# Keep every path the runtime may write to under /tmp, so the container runs fine
+# with a read-only root filesystem plus a writable `tmpfs: /tmp` (see
+# docker-compose.prod.yml). TMPDIR covers Path.GetTempPath() (logging, TempData,
+# form buffering); DOTNET_BUNDLE_EXTRACT_BASE_DIR covers any single-file host.
+ENV TMPDIR=/tmp \
+    DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/.net
+
 COPY --from=build /app/publish ./
 
 # The dotnet/aspnet image ships a non-root user `app` (uid 1654). Use it.
 USER app
 
 EXPOSE 8080
+
+# In-image liveness probe (useful for `docker run` / swarm / non-compose hosts;
+# a compose healthcheck can still override it). The aspnet base image has no
+# curl/wget, so hit /health over a raw TCP socket with bash and check for 200.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+    CMD bash -c 'exec 3<>/dev/tcp/localhost/8080 || exit 1; printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; head -n 1 <&3 | grep -q "200" || exit 1'
 
 ENTRYPOINT ["dotnet", "CTMS.Api.dll"]

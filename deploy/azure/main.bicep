@@ -54,6 +54,22 @@ param mongoVCoreAdminPassword string = ''
 @description('Entra object ID of a user/group to grant Key Vault Secrets Officer (so an operator can seed the connection-string values). Leave empty to skip.')
 param kvAdminPrincipalId string = ''
 
+@description('Single allowed CORS origin for the API (config key Cors:AllowedOrigins[0]) — the browser SDK / CDN delivery path and the Admin UI origin. Empty = the API allows no cross-origin request.')
+param allowedOrigin string = ''
+
+@description('Entra ID authority instance the API validates bearer tokens against (config key AzureAd:Instance). Override for sovereign clouds.')
+#disable-next-line no-hardcoded-env-urls // Entra ID global-cloud authority; sovereign-cloud deployments pass their own.
+param azureAdInstance string = 'https://login.microsoftonline.com/'
+
+@description('Entra ID tenant (directory) ID the API validates access tokens against (config key AzureAd:TenantId). Empty leaves the AzureAd env unset so the app falls back to appsettings.')
+param azureAdTenantId string = ''
+
+@description('Entra ID application (client) ID of the API app registration (config key AzureAd:ClientId).')
+param azureAdClientId string = ''
+
+@description('Accepted audience for incoming access tokens, e.g. "api://ctms" (config key AzureAd:Audience).')
+param azureAdAudience string = ''
+
 // ----- naming --------------------------------------------------------------
 
 var suffix = uniqueString(resourceGroup().id, namePrefix, environmentName)
@@ -76,6 +92,41 @@ var roleKeyVaultSecretsOfficer = subscriptionResourceId('Microsoft.Authorization
 // Expected Key Vault secret names (see deploy/azure/README.md).
 var secretNameMongo = 'CtmsDatabase-ConnectionString'
 var secretNameRedis = 'Redis-ConnectionString'
+
+// Optional container-app env fragments, concatenated into the API container's
+// env below. Both are plain (non-secret) values.
+//   - CORS: one origin, only emitted when a value is supplied (an empty origin
+//     would otherwise be a meaningless allow-list entry).
+//   - AzureAd: the API is a bearer-token VALIDATOR — it needs tenant id, client
+//     id and audience but NO client secret. The confidential-client secret is
+//     the Admin UI's (Key Vault secret 'AdminUi-AzureAdClientSecret'), not the
+//     API's. Emitted only when a tenant id is supplied; otherwise the image
+//     falls back to its appsettings AzureAd section.
+var corsEnv = empty(allowedOrigin) ? [] : [
+  {
+    name: 'Cors__AllowedOrigins__0'
+    value: allowedOrigin
+  }
+]
+
+var azureAdEnv = empty(azureAdTenantId) ? [] : [
+  {
+    name: 'AzureAd__Instance'
+    value: azureAdInstance
+  }
+  {
+    name: 'AzureAd__TenantId'
+    value: azureAdTenantId
+  }
+  {
+    name: 'AzureAd__ClientId'
+    value: azureAdClientId
+  }
+  {
+    name: 'AzureAd__Audience'
+    value: azureAdAudience
+  }
+]
 
 // ----- user-assigned managed identity --------------------------------------
 
@@ -310,7 +361,10 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: [
+          // Base env + optional CORS/AzureAd fragments (see the corsEnv/azureAdEnv
+          // vars). Auth itself is ON here by the image's appsettings default
+          // (Auth:Enabled=true) since ASPNETCORE_ENVIRONMENT is Staging/Production.
+          env: concat([
             {
               name: 'ASPNETCORE_ENVIRONMENT'
               value: environmentName == 'prod' ? 'Production' : 'Staging'
@@ -328,6 +382,9 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: mongoDatabaseName
             }
             {
+              // Bundle cache AND the Data Protection key ring (config key
+              // ConnectionStrings:Redis) — the API persists its key ring here so
+              // every replica shares one set of keys.
               name: 'ConnectionStrings__Redis'
               secretRef: 'redis-connection-string'
             }
@@ -335,7 +392,11 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'Seed__Enabled'
               value: 'false'
             }
-          ]
+            {
+              name: 'RateLimit__Enabled'
+              value: 'true'
+            }
+          ], corsEnv, azureAdEnv)
           probes: [
             {
               type: 'Liveness'

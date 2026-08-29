@@ -24,9 +24,14 @@ namespace CTMS.Api.IntegrationTests.Support;
 /// <c>AuthorizationPolicies</c> evaluate against header-driven roles.
 /// <c>MongoIndexInitializer</c> is left running so the suite exercises the production indexes.
 /// </remarks>
-public sealed class CtmsApiFactory(string connectionString) : WebApplicationFactory<DevBypassAuthHandler>
+public sealed class CtmsApiFactory(
+    string connectionString,
+    IReadOnlyDictionary<string, string?>? settingOverrides = null)
+    : WebApplicationFactory<DevBypassAuthHandler>
 {
     private readonly string _connectionString = connectionString;
+    private readonly IReadOnlyDictionary<string, string?> _settingOverrides =
+        settingOverrides ?? new Dictionary<string, string?>();
 
     public string DatabaseName { get; } = "ctms_it_" + Guid.NewGuid().ToString("N");
 
@@ -66,6 +71,15 @@ public sealed class CtmsApiFactory(string connectionString) : WebApplicationFact
         builder.UseSetting("Seed:Enabled", "false");
         builder.UseSetting("Auth:Enabled", "false");
         builder.UseSetting("Auth:PublicBundleReads", "true");
+
+        // The global rate limiter is off by default for the suite so per-test request volume
+        // never trips it; RateLimitingTests opts back in through settingOverrides.
+        builder.UseSetting("RateLimit:Enabled", "false");
+
+        foreach (var (key, value) in _settingOverrides)
+        {
+            builder.UseSetting(key, value ?? string.Empty);
+        }
 
         builder.ConfigureTestServices(services =>
         {

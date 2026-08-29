@@ -90,7 +90,9 @@ Collection names (camelCase BSON elements throughout):
   (`Created`/`Edited`/`Submitted`/`Approved`/`Rejected`/`Reopened`/`Published`, stored as text),
   Actor, Timestamp, FromState?, ToState?, Detail?. Append-only. Indexes `(ProjectId, Timestamp)`
   and `(EntityType, EntityId, Timestamp)`. `TranslationStringService` appends an entry on every
-  upsert and review transition.
+  upsert and review transition. Unlike the mutable aggregates, `AuditEntry` does **not** derive
+  from `Entity` — it has an `Id` and a `Timestamp` and nothing else; there is no
+  `CreatedAt`/`UpdatedAt` on this collection and `AuditRepository` does not stamp them.
 
 ### Persistence
 
@@ -110,6 +112,33 @@ backend is logged once at startup (`CacheModeLogger`). `IBundleCache` (port in
 serialized `TranslationBundleDto` under `ctms:bundle:{projectId}:{localeCode}:latest` (locale
 code trimmed + lower-cased); TTL is `Cache:BundleTtlMinutes` (default 60). Only present bundles
 are cached (no negative caching); a cache backend failure is logged and treated as a miss.
+
+### Production configuration
+
+The API host applies a production-hardening layer wired in `Program.cs` from
+`src/CTMS.Api/Infrastructure/` (`CorsSetup`, `RateLimitingSetup`, `RequestBodySizeLimit`,
+`DataProtectionSetup`, `LoggingSetup`). All of it is config-driven and degrades safely when a
+key is absent.
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `Cors:AllowedOrigins` | `[]` (none) | String array of origins the `"ctms"` CORS policy allows. Empty/absent ⇒ **no** cross-origin access (correct for the same-origin Blazor UI). When set: those origins + `AllowAnyHeader` + `AllowAnyMethod` + `AllowCredentials`, exposing `ETag` and `Location`. `app.UseCors("ctms")` runs before auth; applies to `/api/*` and the bundle delivery routes. |
+| `RateLimit:Enabled` | `true` | Master switch. `false` skips `AddRateLimiter`/`UseRateLimiter` entirely (the integration harness sets this off; `RateLimitingTests` turns it back on). |
+| `RateLimit:PermitPerWindow` | `120` | Requests per window per partition. Partition key = authenticated user id (`oid`→nameidentifier→`preferred_username`→name), else remote IP. Fixed-window limiter; runs after auth. |
+| `RateLimit:WindowSeconds` | `60` | Fixed-window length; also the fallback `Retry-After` value. |
+| `RateLimit:QueueLimit` | `0` | Queued requests once the permit is spent (0 ⇒ reject immediately). |
+| `RateLimit:BundlePermitPerWindow` | `PermitPerWindow * 5` | Looser budget for the anonymous bundle **delivery** GET path (`GET .../bundles/...`), partitioned by IP — a busy CDN edge does not exhaust a user's budget. |
+| — | — | Rejection ⇒ `429` + RFC 7807 body + `Retry-After` header. `/health` and `/health/ready` opt out via `.DisableRateLimiting()`. |
+| `Limits:MaxRequestBodyBytes` | `262144` (256 KB) | Global request-body cap. Enforced on Kestrel's limit **and** by middleware returning `413` + ProblemDetails (the middleware also covers the test server, which ignores the Kestrel limit). The largest real body is the string upsert. |
+| `ConnectionStrings:Redis` | — | When set, the Data Protection key ring is persisted to Redis (`PersistKeysToStackExchangeRedis`, same connection as the bundle cache; application name `"CTMS"`, key `DataProtection-Keys`) so replicas share antiforgery / auth-cookie keys. When unset, falls back to the framework default (local, ephemeral) with an info log — same pattern as `CacheModeLogger`. At-rest key encryption (`ProtectKeysWithCertificate` / Azure Key Vault) is left as a `// TODO` in `DataProtectionSetup`. |
+| `Logging` (section) | — | `LoggingSetup` clears the default providers and re-adds: human-readable console in **Development**, the built-in **JSON console** (`AddJsonConsole`, `IncludeScopes`, UTC timestamps) everywhere else — no third-party logging package. Trace id is on every log scope (`ActivityTrackingOptions`) and lines up with the `traceId` on ProblemDetails responses. `app.UseHttpLogging()` logs one line per request (method, path, status, elapsed — no headers/bodies), with `/health*` excluded. |
+
+`src/CTMS.Api/appsettings.Production.json` pins the safe posture explicitly: `Auth:Enabled`
+`true`, `Seed:Enabled` `false`, `Cors:AllowedOrigins` `[]`, `RateLimit:Enabled` `true`. The
+host still listens HTTP-only on `:8080` (TLS terminates upstream; `UseHttpsRedirection` stays
+guarded on a configured HTTPS port). `Auth:Enabled=false` throws at startup under `Production`
+(covered by `ProductionStartupTests`); the seeder is Development-only (covered by
+`DataSeederTests`); Swagger is Development-only.
 
 ### Authentication & authorization (WS7)
 

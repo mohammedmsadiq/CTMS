@@ -5,25 +5,34 @@ translation strings for many projects and locales, runs them through a
 review/approval workflow, and serves immutable published bundles to client
 applications.
 
-> **Implementation status (backend mid-rewrite).** The persistence layer has
-> been switched from PostgreSQL / EF Core to **MongoDB** - see
-> [ADR&nbsp;0002](adr/0002-mongodb-as-primary-store.md).
+> **Implementation status.** The persistence layer runs on **MongoDB** - see
+> [ADR&nbsp;0002](adr/0002-mongodb-as-primary-store.md); production hardening is
+> [ADR&nbsp;0003](adr/0003-production-hardening.md).
 >
-> On the current branch:
-> - **Implemented:** the four-project solution; the `Project` / `Locale` /
->   `TranslationKey` / `TranslationString` aggregates and their CRUD +
->   review endpoints; the `TranslationBundle` and `AuditEntry` aggregates;
->   the review workflow including the `Published` state; inline audit writes in
->   `TranslationStringService`; `AuditService` (read); the full MongoDB
->   persistence layer - `AddInfrastructure` wiring, `CtmsMongoContext`, BSON
->   mapping, all six repositories, the `MongoHealthCheck` readiness probe, the
->   `MongoIndexInitializer` and `DataSeeder` hosted services. EF Core, its
->   configs, `CtmsDbContext`, the `InitialCreate` migration and
->   `.config/dotnet-tools.json` have been deleted.
-> - **Planned (no code yet):** the bundle-assembly / publish service and its
->   HTTP endpoint, the audit / history HTTP endpoint, and the Redis cache.
+> On the current branch, all of the following is **implemented**:
+> - the four-project solution plus `CTMS.Client` (SDK) and the `CTMS.AdminUI`
+>   Blazor host;
+> - the `Project` / `Locale` / `TranslationKey` / `TranslationString` aggregates
+>   and their CRUD + review endpoints;
+> - the `TranslationBundle` and `AuditEntry` aggregates, the bundle
+>   assembly/publish service (`TranslationBundleService`) and its HTTP endpoints
+>   (`POST/GET .../bundles/...`), and the read-only history/audit endpoints
+>   (`GET .../history`, `GET .../keys/.../history`);
+> - the review workflow including the `Published` state, and inline audit writes
+>   in `TranslationStringService` / `TranslationBundleService`;
+> - the Redis-backed bundle cache (`IBundleCache` -> `BundleCache` over
+>   `IDistributedCache`) fronting the latest-bundle GET, with ETag / `If-None-Match`
+>   / `304` conditional handling and an in-process fallback when Redis is unset
+>   (WS3 shipped the endpoints, WS4 added caching);
+> - the full MongoDB persistence layer - `AddInfrastructure` wiring,
+>   `CtmsMongoContext`, BSON mapping, all six repositories, the `MongoHealthCheck`
+>   readiness probe, the `MongoIndexInitializer` and `DataSeeder` hosted services;
+> - Entra ID JWT-bearer auth + role/policy authorization (§10), with the
+>   `Auth:Enabled=false` dev bypass and `Auth:PublicBundleReads` anonymous
+>   delivery path.
 >
-> Items below are tagged _(planned)_ where no code for them exists yet.
+> EF Core, its configs, `CtmsDbContext`, the `InitialCreate` migration and
+> `.config/dotnet-tools.json` have been deleted.
 
 ---
 
@@ -49,7 +58,7 @@ flowchart LR
 
 | Project | Responsibility | Key types |
 |---------|----------------|-----------|
-| **CTMS.Domain** | Entities and domain logic. No framework dependencies. Entities derive from `Entity` (`Guid Id`, `CreatedAt`, `UpdatedAt` with `internal` setters); constructors and methods guard invariants; setters are private. `[InternalsVisibleTo("CTMS.Infrastructure")]` lets the persistence layer stamp timestamps and advance `TranslationString.Version`. | `Project`, `Locale`, `TranslationKey`, `TranslationString`, `TranslationBundle`, `AuditEntry`; `ReviewState`, `AuditAction`, `InvalidReviewTransitionException` |
+| **CTMS.Domain** | Entities and domain logic. No framework dependencies. Most entities derive from `Entity` (`Guid Id`, `CreatedAt`, `UpdatedAt` with `internal` setters); constructors and methods guard invariants; setters are private. `[InternalsVisibleTo("CTMS.Infrastructure")]` lets the persistence layer stamp timestamps and advance `TranslationString.Version`. `AuditEntry` is the exception - it is append-only and carries only `Id` and `Timestamp`, so it does not derive from `Entity`. | `Project`, `Locale`, `TranslationKey`, `TranslationString`, `TranslationBundle`, `AuditEntry`; `ReviewState`, `AuditAction`, `InvalidReviewTransitionException` |
 | **CTMS.Application** | Use-case orchestration and the ports it needs. DTOs - never entities - cross the API boundary. `AddApplication()` registers the services. | `ProjectService`, `LocaleService`, `TranslationKeyService`, `TranslationStringService`, `AuditService`; `IProjectRepository`, `ILocaleRepository`, `ITranslationKeyRepository`, `ITranslationStringRepository`, `ITranslationBundleRepository`, `IAuditRepository`, `IUnitOfWork`; `PagedResult<T>`, `Slug`, the application exception types |
 | **CTMS.Infrastructure** | Data access. `AddInfrastructure(IConfiguration)` wires the Mongo client/context, the six repositories, `NoOpUnitOfWork`, the readiness health check, and two hosted startup services. | `CtmsMongoContext` / `IMongoContext`, `MongoMappingRegistration`, `MongoOptions`, `EntityStamps`, `NoOpUnitOfWork`, `MongoWriteExceptions`, `Persistence/Repositories/*Repository`, `MongoHealthCheck`, `MongoIndexInitializer`, `DataSeeder` |
 | **CTMS.Api** | Minimal-API host. Composition root only - it references Infrastructure solely to call `AddInfrastructure`. Endpoints grouped per resource; known exceptions become RFC 7807 ProblemDetails via `ApplicationExceptionHandler`. | `Program.cs`, `Endpoints/*Endpoints.cs`, `Infrastructure/ApplicationExceptionHandler.cs` |
@@ -79,12 +88,13 @@ erDiagram
 | **TranslationKey** | `Id`, `ProjectId`, `KeyName` (dotted path), `Description?`, `CreatedAt`, `UpdatedAt` | Unique `(ProjectId, KeyName)`. `KeyName` matches `[A-Za-z0-9_.-]+`. |
 | **TranslationString** | `Id`, `TranslationKeyId`, `LocaleId`, `Value`, `ReviewState`, `UpdatedBy`, `Version` (`long`), `CreatedAt`, `UpdatedAt` | Unique `(TranslationKeyId, LocaleId)`. `ReviewState` moves only through `ChangeReviewState` (§3). `Version` is the optimistic-concurrency token, incremented by the persistence layer on every stored update. |
 | **TranslationBundle** | `Id`, `ProjectId`, `LocaleCode` (string, BCP-47), `Version` (`int`, starts at 1), `Entries` (`IReadOnlyDictionary<string,string>`, ordinal), `ETag`, `CreatedBy`, `CreatedAt`, `UpdatedAt` | Append-only - never mutated after creation. `Version` is monotonic per `(ProjectId, LocaleCode)`. `ETag` is derived from `Entries` at construction (see §4). |
-| **AuditEntry** | `Id`, `ProjectId`, `EntityType` (e.g. `"TranslationString"`), `EntityId`, `Action` (`AuditAction`), `Actor`, `Timestamp` (UTC), `FromState?`, `ToState?` (`ReviewState`), `Detail?`, `CreatedAt`, `UpdatedAt` | Write-once - never updated or deleted. `AuditAction` = `Created`, `Edited`, `Submitted`, `Approved`, `Rejected`, `Reopened`, `Published`. |
+| **AuditEntry** | `Id`, `ProjectId`, `EntityType` (e.g. `"TranslationString"`), `EntityId`, `Action` (`AuditAction`), `Actor`, `Timestamp` (UTC), `FromState?`, `ToState?` (`ReviewState`), `Detail?` | Write-once - never updated or deleted, so it has no `CreatedAt`/`UpdatedAt`; `Timestamp` is the single time field. `AuditAction` = `Created`, `Edited`, `Submitted`, `Approved`, `Rejected`, `Reopened`, `Published`. |
 
 > `TranslationBundle` and `AuditEntry`, their repositories
-> (`TranslationBundleRepository`, `AuditRepository`) and `AuditService` (read)
-> all exist today. The bundle-assembly / publish service and the HTTP endpoints
-> that expose bundles and audit history are _(planned)_.
+> (`TranslationBundleRepository`, `AuditRepository`), `AuditService` (read), the
+> bundle-assembly / publish service (`TranslationBundleService`) and the HTTP
+> endpoints that expose bundles and audit history all exist today. See §4 and
+> [api.md](api.md#bundles).
 
 ---
 
@@ -139,34 +149,35 @@ review transition). `AuditService` is read-only - it only projects entries.
 
 ## 4. Publishing and immutable bundles
 
-_The bundle-assembly service and the HTTP endpoint are planned; the domain type
-and repository exist._
+Shipped in WS3 (endpoints) and WS4 (caching). `TranslationBundleService`
+(`CTMS.Application/Translations`) assembles bundles; `BundleEndpoints`
+(`CTMS.Api/Endpoints`) exposes them; `BundleCache` fronts the latest-bundle GET.
+Full route reference: [api.md → Bundles](api.md#bundles).
 
-The pieces in place today:
+### Publish flow (`POST /api/projects/{projectId}/bundles/{localeCode}`)
 
-- `TranslationString` can be moved `Approved -> Published` one string at a time
-  via the review endpoint (`action: "publish"`).
-- `ITranslationStringRepository.ListByLocaleAndStateAsync(localeId, state)`
-  reads every string for a locale in a given state - the query a bundle build
-  runs against `Published`.
-- `TranslationBundle` is an immutable aggregate; `TranslationBundleRepository`
-  implements `GetLatestAsync` (sort by `Version` desc), `GetByVersionAsync`, and
-  `InsertAsync` (catches E11000 and throws `ConflictException` when
-  `(ProjectId, LocaleCode, Version)` is taken).
-
-Not yet written: the service that assembles a bundle from a locale's strings,
-and the HTTP endpoint that publishes / serves it. Target publish flow:
-
-1. Caller publishes a `(project, locale)`.
-2. The service reads every `Published` (or `Approved`, TBD by `backend-core`)
-   string for that locale and freezes their `keyName -> value` pairs.
+1. Caller publishes a `(project, locale)`. `{localeCode}` is the BCP-47 code, not
+   a GUID; it is matched against the project's locales.
+2. The service reads every `TranslationString` for that locale whose
+   `ReviewState` is **`Published`** (strings reach that state one at a time via
+   the review `publish` action), joins each to its `TranslationKey.KeyName`, and
+   freezes the `keyName -> value` map.
 3. A new `TranslationBundle` is created with the next `Version` for that
-   `(ProjectId, LocaleCode)` (starting at 1). Older versions are retained.
-4. An `AuditEntry` (`Published`) is written.
-5. The document is inserted and never updated - re-publishing makes a new
-   version.
+   `(ProjectId, LocaleCode)` - `latest.version + 1`, starting at 1. Older
+   versions are retained forever.
+4. Publishing **never changes any string's `ReviewState`** - it only snapshots.
+5. An `AuditEntry` (`Published`, `entityType = "TranslationBundle"`) is written.
+6. The document is inserted and never updated; the `(ProjectId, LocaleCode,
+   Version)` unique index makes a concurrent publish that grabbed the same next
+   version fail `409` (`ConflictException`). Publishing with zero `Published`
+   strings is rejected `400` - no empty bundle is created.
+7. The service invalidates the cache key for that `(project, locale)`.
 
-### ETag
+`POST .../bundles/{localeCode}` requires the `CanPublish` policy (admin /
+manager). This is a separate step from the review `publish` action on a single
+string, which requires `CanReview`.
+
+### Delivery and the ETag
 
 `TranslationBundle.ETag` is computed at construction by
 `TranslationBundle.ComputeETag(entries)`:
@@ -175,10 +186,26 @@ and the HTTP endpoint that publishes / serves it. Target publish flow:
 - For each, append `key`, `"\n"`, `value`, `"\n"` to a buffer.
 - `ETag` = lowercase hex SHA-256 of that buffer's UTF-8 bytes.
 
-It is the **raw hash** - callers wrap it in double quotes to use it as an HTTP
-entity tag. The delivery endpoint (`GET .../bundles/{locale}`, _(planned)_,
-[api.md](api.md#planned-endpoints)) returns the latest bundle with this `ETag`;
-a conditional request with a matching `If-None-Match` gets `304 Not Modified`.
+It is the **raw hash** - the endpoint wraps it in double quotes to use it as a
+strong HTTP entity tag. Two publishes with identical content therefore produce
+byte-identical ETags.
+
+`GET /api/projects/{projectId}/bundles/{localeCode}` returns the latest bundle
+and is an HTTP conditional GET:
+
+- every `200` and every `304` carries `ETag: "<etag>"` and `Cache-Control: no-cache`;
+- a request whose `If-None-Match` contains a matching tag (quoted, `W/`-weak,
+  comma-lists, repeated headers and `*` are all accepted) gets `304 Not Modified`
+  with no body;
+- otherwise it is `200` with the full `TranslationBundleDto`.
+
+These three GET routes (`/{localeCode}`, `/{localeCode}/versions`,
+`/{localeCode}/versions/{version}`) are **anonymous by default** - they are the
+SDK / CDN delivery path. Setting `Auth:PublicBundleReads=false` makes them
+require `CanRead` instead (§10). The `versions` and by-version routes are
+uncached and unconditioned.
+
+Caching for the latest route is §6.
 
 ---
 
@@ -270,22 +297,30 @@ typed exceptions.
 
 ---
 
-## 6. Redis cache _(planned)_
+## 6. Redis cache
 
 Published bundles are read-heavy and immutable - a good cache fit.
-`AddInfrastructure` will register a connection from `ConnectionStrings:Redis`
-(StackExchange.Redis format: `host:port[,options]`).
+`AddInfrastructure` registers an `IDistributedCache`: **StackExchange.Redis**
+(`AddStackExchangeRedisCache`) when `ConnectionStrings:Redis` is set
+(format `host:port[,options]`), otherwise an in-process distributed-memory cache
+so a local `dotnet run` needs no Redis. `CacheModeLogger` logs which backend is
+active once at startup. `BundleCache` (implements `IBundleCache`) wraps it.
 
-- `GET .../bundles/{locale}` checks Redis (key e.g.
-  `bundle:{projectId}:{localeCode}:latest`) before MongoDB; a miss reads Mongo
-  and populates the cache.
-- The cached entry holds the serialized bundle plus its `ETag`, so an
-  `If-None-Match` / `304` check needs no database round-trip.
-- Publishing a new version writes/evicts the cache key. Because bundles are
-  immutable, entries only ever need replacing for a newer version, never for a
-  content change.
-- If Redis is unreachable the service degrades to MongoDB-only; the cache is an
-  optimisation, not a source of truth.
+- Only `GET /api/projects/{projectId}/bundles/{localeCode}` (latest) is cached.
+  It checks the cache before MongoDB; a miss reads Mongo and populates the cache.
+- Key: **`ctms:bundle:{projectId}:{localeCode}:latest`**, locale code trimmed and
+  lower-cased (`BundleCache.KeyFor`).
+- The cached entry is the serialized `TranslationBundleDto`, whose `etag` member
+  carries the content hash - so an `If-None-Match` / `304` check needs no
+  database round-trip on a hit.
+- TTL is `Cache:BundleTtlMinutes` (default 60; `<= 0` falls back to 60).
+- Publishing a new version calls `InvalidateAsync` for that `(project, locale)`.
+  Because bundles are immutable, an entry only ever needs replacing for a newer
+  version, never for a content change.
+- Every cache call is wrapped: a read/write/invalidate failure is logged and
+  treated as a miss, so the service degrades to MongoDB-only. The cache is an
+  optimisation, not a source of truth - and there is no Redis readiness probe
+  for that reason (§7).
 
 ---
 
@@ -294,7 +329,7 @@ Published bundles are read-heavy and immutable - a good cache fit.
 | Route | Purpose | Checks |
 |-------|---------|--------|
 | `GET /health` | Liveness | none - `200` while the process runs |
-| `GET /health/ready` | Readiness | `MongoHealthCheck` (name `database`, tag `ready`) runs `{ ping: 1 }` against the configured database. _(planned)_ a Redis ping once the cache lands. |
+| `GET /health/ready` | Readiness | `MongoHealthCheck` (name `database`, tag `ready`) runs `{ ping: 1 }` against the configured database. There is **no** Redis check: the bundle cache degrades to MongoDB-only if Redis is down, so it is not a readiness dependency. |
 
 ---
 
@@ -304,12 +339,22 @@ Published bundles are read-heavy and immutable - a good cache fit.
 |-----|--------------|---------|---------------|
 | `ConnectionStrings:CtmsDatabase` | `ConnectionStrings__CtmsDatabase` | MongoDB connection string | `mongodb://mongo:27017` (compose) |
 | `Mongo:Database` | `Mongo__Database` | Database name within the Mongo server (`MongoOptions`, default `ctms`) | `ctms` |
-| `ConnectionStrings:Redis` | `ConnectionStrings__Redis` | Redis connection string | `redis:6379` (compose) |
-| `Seed:Enabled` | `Seed__Enabled` | Run the dev data seeder on startup _(planned)_ | `true` in compose; set `false` for staging/prod |
+| `ConnectionStrings:Redis` | `ConnectionStrings__Redis` | Redis connection string for the bundle cache; unset = in-process memory cache | `redis:6379` (compose) |
+| `Cache:BundleTtlMinutes` | `Cache__BundleTtlMinutes` | TTL for a cached latest bundle (`BundleCacheOptions`); `<= 0` falls back to 60 | `60` |
+| `Seed:Enabled` | `Seed__Enabled` | Run the dev data seeder on startup (Development only, and only when `true`) | `true` in compose; `false` in `appsettings.Development.json` |
 | `ASPNETCORE_ENVIRONMENT` | (same) | `Development` enables Swagger (and the seeder) | `Development` |
 | `AzureAd:Instance` / `:TenantId` / `:ClientId` / `:Audience` | `AzureAd__*` | Entra ID app registration for JWT-bearer validation (§10) | placeholders; set in user-secrets / Key Vault |
 | `Auth:Enabled` | `Auth__Enabled` | `false` = permissive all-roles bypass (local/tests). Refused under `Production`. | `false` in `appsettings.Development.json`, else `true` |
 | `Auth:PublicBundleReads` | `Auth__PublicBundleReads` | `true` = bundle delivery GETs are anonymous; `false` = require `CanRead` | `true` |
+| `Cors:AllowedOrigins` | `Cors__AllowedOrigins__0`, ... | String array of allowed browser origins for the `"ctms"` CORS policy. Empty ⇒ no cross-origin access (§11, [ADR&nbsp;0003](adr/0003-production-hardening.md)) | `[]` in `appsettings.Production.json` |
+| `RateLimit:Enabled` | `RateLimit__Enabled` | Master switch for the global rate limiter (§11) | `true`; `false` in the integration test factory |
+| `RateLimit:PermitPerWindow` / `:WindowSeconds` / `:QueueLimit` / `:BundlePermitPerWindow` | `RateLimit__*` | Fixed-window limiter knobs | `120` / `60` / `0` / `PermitPerWindow × 5` |
+| `Limits:MaxRequestBodyBytes` | `Limits__MaxRequestBodyBytes` | Max request body size (Kestrel + a `413` middleware); `<= 0` ⇒ default (§11) | `262144` (256 KB) |
+
+> `appsettings.Production.json` only overrides `Cors:AllowedOrigins`,
+> `RateLimit:Enabled`, `Auth:Enabled` and `Seed:Enabled`; the numeric
+> rate-limit / body-size knobs use the code defaults above. See §11 and
+> [ADR&nbsp;0003](adr/0003-production-hardening.md).
 
 - Config binds `appsettings.json` -> `appsettings.{Environment}.json` ->
   environment variables (`__` maps to `:`).
@@ -329,31 +374,53 @@ Published bundles are read-heavy and immutable - a good cache fit.
 
 ## 9. Testing
 
-`tests/CTMS.Application.Tests` (xUnit) exercises the application services end to
-end against real repositories on a real MongoDB; `ReviewWorkflowTests` drives the
-`TranslationString` review transitions directly against the domain type.
+Three test projects, all xUnit. `dotnet test` runs them all; the build is
+warnings-as-errors (`Directory.Build.props`), so any warning fails CI.
 
-- The suite uses **`EphemeralMongo`** (3.2.0): a `MongoFixture` starts a
-  throwaway `mongod`, shared through the `"mongo"` xUnit collection; each test
-  class builds a `CtmsTestHarness` over the fixture's connection string. No
-  Docker, no `mongo:7` container needed for `dotnet test` itself - the pipeline's
-  service container is belt-and-braces.
-- `NuGetAudit` is disabled on the test project only: `EphemeralMongo` pulls
-  older `SharpCompress` / `Snappier` transitively and those advisories must not
-  trip the warnings-as-errors build. Production projects keep auditing on.
-- **Migration in progress:** `ProjectServiceTests` and `LocaleServiceTests` plus
-  the csproj are on the new harness; `TranslationKeyServiceTests`,
-  `TranslationStringServiceTests` and `ReviewWorkflowTests` had not been ported
-  at the time of writing.
+**`tests/CTMS.Application.Tests`** - application services end to end against real
+repositories on a real MongoDB, plus focused unit tests.
 
-Build is warnings-as-errors (`Directory.Build.props`), so any warning fails CI.
+- MongoDB via **`EphemeralMongo`** (3.2.0): a `MongoFixture` starts a throwaway
+  in-process `mongod`, shared through the `"mongo"` xUnit collection; each test
+  class builds a `CtmsTestHarness` (one isolated database, every production index
+  applied, all six repositories and all services wired, an in-memory
+  `IDistributedCache` standing in for Redis). No Docker needed.
+- Covers `Project` / `Locale` / `TranslationKey` / `TranslationString` service
+  behaviour, `TranslationBundleService` (assembly, versioning, ETag,
+  cache interaction), `AuditService`, project-scoped queries, and the
+  `BundleConditionalRequest` `If-None-Match` matcher. `ReviewWorkflowTests`
+  drives the `TranslationString` transitions directly against the domain type.
+- WS7 unit tests: `AuthorizationPoliciesTests` drives the real authorization
+  runtime built from `AuthorizationPolicies.Configure` for every `(role, policy)`
+  pair; `TokenActorTests` covers the actor-from-token helper. The project has a
+  `FrameworkReference` to `Microsoft.AspNetCore.App` for those ASP.NET types.
 
-- WS7 adds focused unit tests: `AuthorizationPoliciesTests` drives the real
-  authorization runtime built from `AuthorizationPolicies.Configure` for every
-  `(role, policy)` pair, and `TokenActorTests` covers the actor-from-token
-  helper. The test project gains a `FrameworkReference` to
-  `Microsoft.AspNetCore.App` (needed to see the API's ASP.NET types) but still
-  no `WebApplicationFactory` — see `AuthorizationPoliciesTests` for why.
+**`tests/CTMS.Api.IntegrationTests`** - the full HTTP surface through a
+`WebApplicationFactory<DevBypassAuthHandler>` over the real `Program`
+composition root and DI graph.
+
+- `MongoFixture` starts one MongoDB for the assembly: it **prefers a real
+  `mongo:7` via `Testcontainers.MongoDb`** when a Docker daemon is reachable and
+  **falls back to `EphemeralMongo`** otherwise (it throws with both reasons
+  rather than skipping if neither starts). `BackendReportTests` surfaces which
+  backend ran.
+- `CtmsApiFactory` overrides Mongo config with the fixture's connection string,
+  leaves `ConnectionStrings:Redis` unset (in-memory cache), sets
+  `Seed:Enabled=false` and `Auth:Enabled=false`, then replaces the default auth
+  scheme with `TestAuthHandler` so the **real `AuthorizationPolicies`** evaluate
+  against header-driven roles (`ClientAs("ctms.reviewer", ...)`).
+- Covers the authorization matrix, actor-from-token, optimistic-concurrency
+  `409`s, bundle ETag / `304`, history, lifecycle, validation / not-found, and
+  health.
+
+**`tests/CTMS.Client.Tests`** - the `CTMS.Client` SDK against a stub
+`HttpMessageHandler`: revalidation / `304` / offline-stale state machine, pinned
+versions, the locale fallback chain, and `FileBundleStore` round-trip / atomic
+write / corruption handling.
+
+`NuGetAudit` is disabled on all three test projects (EphemeralMongo pulls older
+`SharpCompress` / `Snappier`; Testcontainers pulls SSH.NET). Shipping projects
+keep auditing on, so `dotnet build` still fails on advisories in product code.
 
 ---
 
@@ -408,3 +475,22 @@ persistence); each outbound API call gets a freshly-acquired access token for
 the `Ctms:ApiScope` audience. The API trusts nothing but the validated JWT — the
 `updatedBy` / `reviewedBy` / `publishedBy` body fields are overridden with the
 token identity whenever a real token is present.
+
+---
+
+## 11. Production hardening
+
+Wired in `Program.cs` from `src/CTMS.Api/Infrastructure/*Setup` helpers; every
+item is configuration-driven and inert in `Development` / tests. Rationale and
+trade-offs: [ADR&nbsp;0003](adr/0003-production-hardening.md). Config keys: §8.
+
+| Concern | Helper | Behaviour |
+|---------|--------|-----------|
+| **CORS** | `CorsSetup` (`UseCors` before auth) | One policy `"ctms"`. `Cors:AllowedOrigins` empty ⇒ no cross-origin access; when set, those origins with any header/method, credentials allowed, `ETag` + `Location` exposed. |
+| **Rate limiting** | `RateLimitingSetup` (`UseRateLimiter` after auth) | Global fixed-window limiter partitioned by token user-id (authenticated) or remote IP; the anonymous `.../bundles/...` GET path gets a separate looser IP partition. `429` + RFC 7807 + `Retry-After`. `/health*` opt out. Off when `RateLimit:Enabled=false`. |
+| **Request-size cap** | `RequestBodySizeLimit` (middleware, early) | `Limits:MaxRequestBodyBytes` (256 KB default) on Kestrel and via a `413` + RFC 7807 middleware that also covers the test host and chunked bodies. |
+| **Data Protection** | `DataProtectionSetup` | `SetApplicationName("CTMS")`; key ring persisted to Redis (`ConnectionStrings:Redis`, key `DataProtection-Keys`) so replicas share keys across restarts; local ephemeral fallback + info log when Redis is unset. At-rest key encryption is a `TODO`. |
+| **Structured logging** | `LoggingSetup` | JSON console (`AddJsonConsole`, scopes on, UTC) outside Development; `TraceId`/`SpanId`/`ParentId` on every scope (lines up with the `traceId` on ProblemDetails bodies); one HTTP log line per request (method, path, status, elapsed), `/health*` excluded. No third-party logging package. |
+
+`docker-compose.prod.yml` is the compose profile that exercises this (auth on,
+`ASPNETCORE_ENVIRONMENT=Production`, Redis required).

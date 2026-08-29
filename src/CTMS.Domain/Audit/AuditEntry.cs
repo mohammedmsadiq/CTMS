@@ -1,13 +1,14 @@
-using CTMS.Domain.Common;
 using CTMS.Domain.Translations;
 
 namespace CTMS.Domain.Audit;
 
 /// <summary>
 /// An append-only record of a single state-changing operation on a domain entity. Audit
-/// entries are never updated or deleted.
+/// entries are never updated or deleted, so — unlike the mutable aggregates — this type does
+/// not derive from <see cref="CTMS.Domain.Common.Entity"/>: it carries only an <see cref="Id"/>
+/// and a <see cref="Timestamp"/>, with no <c>CreatedAt</c>/<c>UpdatedAt</c> bookkeeping.
 /// </summary>
-public sealed class AuditEntry : Entity
+public sealed class AuditEntry
 {
     private AuditEntry()
     {
@@ -48,6 +49,9 @@ public sealed class AuditEntry : Entity
         Detail = string.IsNullOrWhiteSpace(detail) ? null : detail.Trim();
         Timestamp = DateTime.UtcNow;
     }
+
+    /// <summary>Surrogate identity, assigned on construction and mapped to Mongo's <c>_id</c>.</summary>
+    public Guid Id { get; private set; } = Guid.NewGuid();
 
     public Guid ProjectId { get; private set; }
 

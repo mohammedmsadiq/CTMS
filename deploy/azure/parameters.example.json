@@ -28,6 +28,21 @@
     },
     "kvAdminPrincipalId": {
       "value": ""
+    },
+    "allowedOrigin": {
+      "value": ""
+    },
+    "azureAdInstance": {
+      "value": "https://login.microsoftonline.com/"
+    },
+    "azureAdTenantId": {
+      "value": ""
+    },
+    "azureAdClientId": {
+      "value": ""
+    },
+    "azureAdAudience": {
+      "value": ""
     }
   }
 }

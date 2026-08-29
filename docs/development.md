@@ -41,8 +41,9 @@ dotnet restore CTMS.sln
 
 ## 2. Start MongoDB + Redis
 
-The API needs MongoDB; the (planned) bundle cache needs Redis. Bring both up
-with Docker Compose from the repo root:
+The API needs MongoDB; the bundle cache uses Redis when
+`ConnectionStrings:Redis` is set (otherwise an in-process memory cache). Bring
+both up with Docker Compose from the repo root:
 
 ```bash
 cp .env.example .env           # optional - sensible defaults are baked in
@@ -56,7 +57,7 @@ Compose services (`docker-compose.yml`, owned by the infra/devops workstream):
 | Service | Image | Host port | Purpose |
 |---------|-------|-----------|---------|
 | `mongo` | `mongo:7` | `27017` | Primary datastore. Named volume `mongo-data` persists between runs. |
-| `redis` | `redis:7-alpine` | `6379` | Cache for the (planned) bundle endpoint. Persistence disabled. |
+| `redis` | `redis:7-alpine` | `6379` | Distributed cache fronting `GET .../bundles/{localeCode}` (latest). Persistence disabled. |
 | `api` | built from `./Dockerfile` | `8080` | The API. Waits for `mongo` + `redis` healthchecks. Sets `Seed__Enabled=true`. |
 
 Local-only tweaks go in `docker-compose.override.yml` (git-ignored); see
@@ -198,8 +199,13 @@ ingress/platform) and runs as the non-root `app` user.
 
 ## 7. Contributing
 
-- Branch off `main`; open a PR. CI (`azure-pipelines.yml`) runs restore, build
-  (warnings-as-errors), and tests with coverage on every PR to `main`.
+- Branch off `main`; open a PR. Two CI systems run restore, build
+  (warnings-as-errors) and tests with coverage on every PR to `main`:
+  [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (GitHub Actions, the
+  required check) and [`azure-pipelines.yml`](../azure-pipelines.yml) (Azure
+  DevOps, which also packages and pushes the API image on `main`). Neither wires
+  a MongoDB container - the test suites self-provision (EphemeralMongo;
+  Testcontainers `mongo:7` for the integration suite when Docker is present).
 - Update docs in the same change as the behaviour: `CLAUDE.md` for
   commands/architecture, `docs/api.md` for endpoint changes, `docs/adr/` for
   hard-to-reverse decisions.

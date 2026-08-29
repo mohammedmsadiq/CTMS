@@ -53,7 +53,13 @@ public static class MongoMappingRegistration
             RegisterEntity<Locale>();
             RegisterEntity<TranslationKey>();
             RegisterEntity<TranslationString>();
-            RegisterEntity<AuditEntry>();
+
+            // AuditEntry is append-only and does not derive from Entity (no CreatedAt/UpdatedAt);
+            // it still auto-maps cleanly — Id maps to _id via the default id-member convention.
+            if (!BsonClassMap.IsClassMapRegistered(typeof(AuditEntry)))
+            {
+                BsonClassMap.RegisterClassMap<AuditEntry>(cm => cm.AutoMap());
+            }
 
             if (!BsonClassMap.IsClassMapRegistered(typeof(TranslationBundle)))
             {

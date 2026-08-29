@@ -1,23 +1,26 @@
 # -----------------------------------------------------------------------------
 # Reusable test steps for CTMS.
 #
-# Runs `dotnet test` with Coverlet's "XPlat Code Coverage" collector, then
-# publishes the VSTest .trx results and the Cobertura coverage report so they
-# show up on the pipeline run summary.
+# Runs `dotnet test` at solution scope with Coverlet's "XPlat Code Coverage"
+# collector, then publishes the VSTest .trx results and the Cobertura coverage
+# report so they show up on the pipeline run summary. A single run is enough:
+# the Azure DevOps Tests tab already groups results by test assembly, so
+# `CTMS.Api.IntegrationTests` shows as its own group without splitting the
+# invocation.
 #
-# MongoDB: the test suite uses EphemeralMongo, which starts its own throwaway
-# mongod in-process, so `dotnet test` needs no external database. The calling job
-# still attaches a `mongo:7` service container and passes its connection string
-# through the parameters below, surfaced to the test host as the SAME environment
-# variable names the application reads (double-underscore overrides):
-#     ConnectionStrings__CtmsDatabase   ->  ConnectionStrings:CtmsDatabase
-#     Mongo__Database                   ->  Mongo:Database
-# That makes it a one-line change to point the suite at a real server later; it
-# is harmless while EphemeralMongo is in charge.
+# MongoDB: neither suite reads ConnectionStrings:CtmsDatabase, so no service
+# container or connection-string env var is wired here (azure-pipelines.yml
+# dropped its `mongo:7` service for the same reason; GitHub Actions matches):
+#   * CTMS.Application.Tests    - EphemeralMongo starts an in-process mongod.
+#   * CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent has a
+#     Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo. The
+#     WebApplicationFactory overrides the API's Mongo config with the fixture's
+#     connection string.
 #
-# NOTE: the test project sets <NuGetAudit>false</NuGetAudit> (EphemeralMongo
-# pulls older SharpCompress/Snappier transitively). The solution build keeps
-# auditing on, so `dotnet build` still fails on advisories in shipping code.
+# NOTE: the test projects set <NuGetAudit>false</NuGetAudit> (EphemeralMongo
+# pulls older SharpCompress/Snappier, Testcontainers pulls SSH.NET). The solution
+# build keeps auditing on, so `dotnet build` still fails on advisories in
+# shipping code.
 # -----------------------------------------------------------------------------
 parameters:
   - name: buildConfiguration
@@ -26,12 +29,6 @@ parameters:
   - name: solution
     type: string
     default: CTMS.sln
-  - name: mongoConnectionString
-    type: string
-    default: mongodb://localhost:27017
-  - name: mongoDatabase
-    type: string
-    default: ctms_ci
   - name: resultsDirectory
     type: string
     default: $(Agent.TempDirectory)/TestResults
@@ -48,9 +45,6 @@ steps:
         --logger trx
         --collect:"XPlat Code Coverage"
         --results-directory "${{ parameters.resultsDirectory }}"
-    env:
-      ConnectionStrings__CtmsDatabase: ${{ parameters.mongoConnectionString }}
-      Mongo__Database: ${{ parameters.mongoDatabase }}
 
   - task: PublishTestResults@2
     displayName: Publish test results (.trx)

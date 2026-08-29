@@ -13,7 +13,7 @@ public sealed class AuditRepository : IAuditRepository
     public AuditRepository(IMongoContext context) => _entries = context.AuditEntries;
 
     public async Task AppendAsync(AuditEntry entry, CancellationToken cancellationToken = default)
-        => await _entries.InsertOneAsync(entry.StampCreated(), cancellationToken: cancellationToken);
+        => await _entries.InsertOneAsync(entry, cancellationToken: cancellationToken);
 
     public async Task<IReadOnlyList<AuditEntry>> ListByEntityAsync(
         string entityType,

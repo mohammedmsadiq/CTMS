@@ -6,14 +6,21 @@
 #   PR  : validation build for pull requests targeting `main`
 #
 # Stages
-#   Build    - install SDK, restore, build (warnings-as-errors), test + coverage
-#              Runs on every CI and PR build. A MongoDB service container is
-#              attached for the test job.
+#   Build    - install SDK, restore, build (warnings-as-errors), test + coverage.
+#              Runs on every CI and PR build.
 #   Package  - `dotnet publish` the API + `docker buildAndPush` the root
 #              Dockerfile to ACR. `main` only.
 #   Deploy   - DISABLED stub (condition: false) that documents where the Azure
 #              Container Apps rollout hooks in. See
 #              .azuredevops/templates/deploy-stage.yml.
+#
+# MongoDB for the test job
+#   No service / resource container is attached. Both suites self-provision and
+#   neither reads ConnectionStrings:CtmsDatabase, so a container would be dead
+#   wiring (GitHub Actions' .github/workflows/ci.yml is deliberately identical):
+#     * tests/CTMS.Application.Tests  - EphemeralMongo (in-process mongod).
+#     * tests/CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent
+#       has a Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo.
 #
 # Variable groups (Pipelines > Library) - referenced, never defined here:
 #   ctms-ci   - shared CI knobs.
@@ -42,20 +49,6 @@ variables:
     value: Release
   - name: vmImage
     value: ubuntu-latest
-  # Env-var names the app + tests read (double-underscore overrides of the
-  # config keys ConnectionStrings:CtmsDatabase / Mongo:Database). The value
-  # points at the `mongo` service container declared under resources.
-  - name: ConnectionStrings__CtmsDatabase
-    value: mongodb://localhost:27017
-  - name: Mongo__Database
-    value: ctms_ci
-
-resources:
-  containers:
-    - container: mongo
-      image: mongo:7
-      ports:
-        - 27017:27017
 
 stages:
   # ---------------------------------------------------------------------------
@@ -66,10 +59,6 @@ stages:
         displayName: Restore, build, test (+coverage)
         pool:
           vmImage: $(vmImage)
-        # Ephemeral MongoDB for the test run. Port 27017 is published to the
-        # agent host, so the test host reaches it on localhost.
-        services:
-          mongo: mongo
         steps:
           - template: .azuredevops/templates/build-steps.yml
             parameters:
@@ -78,8 +67,6 @@ stages:
           - template: .azuredevops/templates/test-steps.yml
             parameters:
               buildConfiguration: $(buildConfiguration)
-              mongoConnectionString: $(ConnectionStrings__CtmsDatabase)
-              mongoDatabase: $(Mongo__Database)
 
   # ---------------------------------------------------------------------------
   - stage: Package
