@@ -1,0 +1,148 @@
+@page "/dashboard"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Dashboard — CTMS Admin</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Dashboard</h1>
+    <div style="min-width: 16rem;">
+        <label class="form-label small mb-1" for="dash-app">Scope</label>
+        <select id="dash-app" class="form-select form-select-sm" value="@(Application ?? "")" @onchange="OnScopeChanged">
+            <option value="">All applications</option>
+            @foreach (var app in _apps)
+            {
+                <option value="@app.Code">@app.Name (@app.Code)</option>
+            }
+        </select>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading dashboard…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_data is not null)
+{
+    <div class="row row-cols-2 row-cols-md-4 g-3 mb-4">
+        <div class="col">
+            <div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Applications</div>
+                <div class="fs-3 fw-semibold">@_data.ApplicationCount</div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Languages</div>
+                <div class="fs-3 fw-semibold">@_data.LanguageCount</div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Keys</div>
+                <div class="fs-3 fw-semibold">@_data.KeyCount</div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Missing strings</div>
+                <div class="fs-3 fw-semibold">@_data.TotalMissing</div>
+            </div></div>
+        </div>
+    </div>
+
+    <h2 class="h5">Coverage by language</h2>
+    @if (_data.Coverage.Count == 0)
+    {
+        <EmptyState Title="No coverage data" Hint="Add languages and keys to see coverage." />
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">Language</th>
+                        <th scope="col" style="width: 40%;">Coverage</th>
+                        <th scope="col" class="text-end">Translated</th>
+                        <th scope="col" class="text-end">Missing</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in _data.Coverage)
+                    {
+                        <tr>
+                            <td>@c.LanguageName <code class="ms-1">@c.LanguageCode</code></td>
+                            <td>
+                                <div class="progress" role="progressbar"
+                                     aria-label="@($"{c.LanguageName} coverage")"
+                                     aria-valuenow="@((int)Math.Round(c.Percent))" aria-valuemin="0" aria-valuemax="100">
+                                    <div class="progress-bar @BarClass(c.Percent)" style="width: @c.Percent.ToString(System.Globalization.CultureInfo.InvariantCulture)%">
+                                        @c.Percent.ToString("0.#")%
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="text-end">@c.TranslatedCount / @c.TotalKeys</td>
+                            <td class="text-end">@c.MissingCount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? Application { get; set; }
+
+    private bool _loading = true;
+    private ApiError? _loadError;
+    private DashboardResponse? _data;
+    private IReadOnlyList<ApplicationDto> _apps = Array.Empty<ApplicationDto>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var apps = await Api.GetApplicationsAsync();
+        if (apps.IsSuccess)
+        {
+            _apps = apps.Value!;
+        }
+    }
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        var result = await Api.GetDashboardAsync(string.IsNullOrWhiteSpace(Application) ? null : Application);
+        if (result.IsSuccess)
+        {
+            _data = result.Value;
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private void OnScopeChanged(ChangeEventArgs e)
+    {
+        var code = e.Value?.ToString();
+        Nav.NavigateTo(string.IsNullOrEmpty(code) ? "dashboard" : $"dashboard?application={Uri.EscapeDataString(code)}");
+    }
+
+    private static string BarClass(double percent) => percent switch
+    {
+        >= 90 => "bg-success",
+        >= 50 => "bg-info",
+        >= 20 => "bg-warning",
+        _ => "bg-danger",
+    };
+}

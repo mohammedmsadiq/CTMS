@@ -3,38 +3,54 @@ using System.Collections.Generic;
 
 namespace CTMS.Client.Internal;
 
-/// <summary>Wire shape of <c>TranslationBundleDto</c> from the CTMS API.</summary>
-internal sealed class BundleWire
+/// <summary>Wire shape of <c>PublishedTranslationsResponse</c> from the CTMS API.</summary>
+internal sealed class TranslationsWire
 {
-    public Guid Id { get; set; }
+    public string Application { get; set; } = string.Empty;
 
-    public Guid ProjectId { get; set; }
+    public string Language { get; set; } = string.Empty;
 
-    public string LocaleCode { get; set; } = string.Empty;
-
-    public int Version { get; set; }
-
-    public Dictionary<string, string> Entries { get; set; } = new(StringComparer.Ordinal);
-
-    public string ETag { get; set; } = string.Empty;
-
-    public string CreatedBy { get; set; } = string.Empty;
-
-    public DateTimeOffset CreatedAt { get; set; }
+    public Dictionary<string, string> Translations { get; set; } = new(StringComparer.Ordinal);
 }
 
-/// <summary>Wire shape of <c>BundleVersionDto</c> from the CTMS API.</summary>
-internal sealed class BundleVersionWire
+/// <summary>Wire shape of <c>LanguageDto</c> from <c>GET /api/languages</c>.</summary>
+internal sealed class LanguageWire
 {
-    public int Version { get; set; }
+    public string Code { get; set; } = string.Empty;
 
-    public string ETag { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+
+    public string? FallbackCode { get; set; }
+
+    public bool IsRtl { get; set; }
+
+    public bool Active { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
 
-    public string CreatedBy { get; set; } = string.Empty;
+    public DateTimeOffset UpdatedAt { get; set; }
+}
 
-    public int EntryCount { get; set; }
+/// <summary>Wire shape of <c>ApplicationDto</c> from <c>GET /api/applications</c>.</summary>
+internal sealed class ApplicationWire
+{
+    public string Code { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public string? Description { get; set; }
+
+    public bool IsShared { get; set; }
+
+    public bool Active { get; set; }
+
+    public string BaseLanguageCode { get; set; } = string.Empty;
+
+    public List<string> EnabledLanguageCodes { get; set; } = new();
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 /// <summary>Subset of an RFC 7807 <c>application/problem+json</c> body.</summary>

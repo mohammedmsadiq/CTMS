@@ -1,8 +1,9 @@
 # Ctms.MauiSample
 
 A .NET MAUI sample that consumes the [`CTMS.Client`](../../src/CTMS.Client) SDK:
-it loads a published translation bundle, resolves keys through the locale
-fallback chain, shows how fresh the data is, and lets the user force a refresh.
+it loads an assembled-on-demand translation set, resolves keys through the
+language fallback chain, shows how fresh the data is, and lets the user force a
+refresh.
 
 > **There is no project here yet.** The MAUI workload
 > (`dotnet workload install maui`) was not available in the environment that
@@ -80,18 +81,17 @@ public static class MauiProgram
 
         builder.Services.AddCtmsClient(options =>
         {
-            options.BaseAddress    = new Uri("https://ctms.example.com");
-            options.ProjectId      = Guid.Parse("11111111-1111-1111-1111-111111111111");
-            options.DefaultLocale  = "en";
+            options.BaseAddress     = new Uri("https://ctms.example.com");
+            options.Application     = "icoach";   // the application code (Project slug)
+            options.DefaultLanguage = "en-GB";
 
             // FileSystem.AppDataDirectory is the per-user, per-app writable
             // sandbox on every platform and survives app restarts.
-            options.BundleStore    = new FileBundleStore(
-                Path.Combine(FileSystem.AppDataDirectory, "ctms-bundles"));
+            options.CacheDirectory  = Path.Combine(FileSystem.AppDataDirectory, "ctms-translations");
 
             // Mobile: revalidate sparingly; the offline-stale path covers gaps.
-            options.StalenessTtl   = TimeSpan.FromHours(6);
-            options.RequestTimeout = TimeSpan.FromSeconds(10);
+            options.StalenessTtl    = TimeSpan.FromHours(6);
+            options.RequestTimeout  = TimeSpan.FromSeconds(10);
             options.DiagnosticsLogger = m => System.Diagnostics.Debug.WriteLine(m);
 
             // Only needed if the deployment sets Auth:PublicBundleReads=false:
@@ -108,7 +108,10 @@ public static class MauiProgram
 }
 ```
 
-## 4. A page: bundle version, retrieved-at, stale indicator, refresh
+`CacheDirectory` gives you a `FileTranslationStore` rooted there; pass
+`options.TranslationStore` instead to supply your own `ITranslationStore`.
+
+## 4. A page: language, retrieved-at, stale indicator, refresh
 
 `MainPage.xaml`:
 
@@ -136,7 +139,7 @@ namespace Ctms.MauiSample;
 public partial class MainPage : ContentPage
 {
     private readonly ICtmsClient _ctms;
-    private string Locale => CultureInfo.CurrentUICulture.Name; // e.g. "fr-CA"
+    private string Language => CultureInfo.CurrentUICulture.Name; // e.g. "fr-CA"
 
     public MainPage(ICtmsClient ctms)
     {
@@ -148,8 +151,10 @@ public partial class MainPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
-        // Warm the chain so Get(...) resolves offline from the first frame.
-        await _ctms.PrefetchAsync(new[] { Locale, "en" });
+        // Warm the chain so Get(...) resolves offline from the first frame. The
+        // server already fills gaps from each language's FallbackCode chain; the
+        // client list is a secondary safety net across loaded languages.
+        await _ctms.PrefetchAsync(new[] { Language, "en-GB" });
         await LoadAsync();
     }
 
@@ -157,11 +162,12 @@ public partial class MainPage : ContentPage
     {
         try
         {
-            TranslationBundle bundle = await _ctms.GetBundleAsync(Locale);
+            TranslationSet set = await _ctms.GetTranslationsAsync(Language);
 
-            Greeting.Text        = _ctms.Get("home.greeting", Locale, "en");
-            Meta.Text            = $"{bundle.LocaleCode} v{bundle.Version} · retrieved {bundle.RetrievedAt.LocalDateTime:g}";
-            StaleBanner.IsVisible = bundle.IsStale;
+            Greeting.Text         = _ctms.Get("home.greeting", Language, "en-GB");
+            Meta.Text             = $"{set.Application}/{set.Language} · {set.Entries.Count} keys · " +
+                                    $"retrieved {set.RetrievedAt.LocalDateTime:g}";
+            StaleBanner.IsVisible = set.IsStale;
         }
         catch (CtmsOfflineException)
         {
@@ -176,13 +182,24 @@ public partial class MainPage : ContentPage
 }
 ```
 
+### A language picker
+
+`GetLanguagesAsync` / `GetApplicationsAsync` are thin passthroughs over the
+anonymous catalogue endpoints:
+
+```csharp
+foreach (LanguageInfo lang in await _ctms.GetLanguagesAsync())
+    LanguagePicker.Items.Add($"{lang.Name} ({lang.Code})");
+```
+
 ### What to look for when running it
 
-- First launch online: `Meta` shows a version and a fresh timestamp;
+- First launch online: `Meta` shows the language and a fresh timestamp;
   `StaleBanner` hidden.
-- Tap **Refresh** immediately: the SDK sends `If-None-Match`, the API returns
-  `304`, `RetrievedAt` is unchanged but the bundle is still `IsStale = false`.
-- Kill the network and relaunch: the bundle loads from
-  `FileSystem.AppDataDirectory`, `StaleBanner` appears.
+- Tap **Refresh** immediately: the SDK sends `If-None-Match` with the stored
+  `ETag`, the API returns `304`, `RetrievedAt` is unchanged and the set is still
+  `IsStale = false`.
+- Kill the network and relaunch: the set loads from
+  `FileSystem.AppDataDirectory`, `StaleBanner` appears (`IsStale = true`).
 - Clear app data, stay offline, relaunch: `CtmsOfflineException` — the page
   falls back to its own defaults.

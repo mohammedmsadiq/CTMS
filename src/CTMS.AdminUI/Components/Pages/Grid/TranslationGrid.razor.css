@@ -1,0 +1,53 @@
+.grid-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.grid-table {
+    /* Let the browser widen the table past the viewport; the wrapper scrolls. */
+    width: auto;
+    min-width: 100%;
+}
+
+.grid-table .key-col {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background-color: var(--bs-body-bg);
+    min-width: 16rem;
+    max-width: 22rem;
+    box-shadow: 1px 0 0 var(--bs-border-color);
+}
+
+.grid-table thead .key-col {
+    z-index: 3;
+}
+
+.grid-table .lang-col {
+    min-width: 12rem;
+    white-space: nowrap;
+}
+
+.grid-cell {
+    min-width: 12rem;
+    max-width: 22rem;
+    vertical-align: top;
+}
+
+.grid-cell.rtl {
+    text-align: right;
+}
+
+.grid-cell.missing {
+    background-color: var(--bs-warning-bg-subtle);
+}
+
+.cell-view {
+    min-height: 2.25rem;
+}
+
+.cell-value {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-bottom: 0.25rem;
+}

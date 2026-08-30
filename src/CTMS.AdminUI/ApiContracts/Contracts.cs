@@ -3,52 +3,88 @@ namespace CTMS.AdminUI.ApiContracts;
 // These records mirror the wire contract of backend-core's /api/* endpoints
 // (see docs/api.md). They are intentionally a copy — the UI never references
 // CTMS.Application. Keep them in sync when the backend contract changes.
+//
+// Wire is camelCase (baseLanguageCode, translationKeyId, ...). The application
+// model: applications identified by their `code` (slug), a global language
+// catalogue, keys that carry a `category`, string `status` (no version token,
+// last-write-wins), plus assemble-on-demand delivery.
 
-// ---- Projects -------------------------------------------------------------
+// ---- Applications -------------------------------------------------------
 
-public sealed record ProjectDto(
-    Guid Id,
-    string Name,
-    string Slug,
-    string? Description,
-    string BaseLocaleCode,
-    DateTime CreatedAt,
-    DateTime UpdatedAt);
-
-public sealed record CreateProjectRequest(
-    string Name,
-    string BaseLocaleCode,
-    string? Slug = null,
-    string? Description = null);
-
-// ---- Locales --------------------------------------------------------------
-
-public sealed record LocaleDto(
-    Guid Id,
-    Guid ProjectId,
+public sealed record ApplicationDto(
     string Code,
-    string DisplayName,
-    bool IsRtl,
+    string Name,
+    string? Description,
+    bool IsShared,
+    bool Active,
+    string BaseLanguageCode,
+    IReadOnlyList<string> EnabledLanguageCodes,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public sealed record CreateLocaleRequest(string Code, string DisplayName, bool IsRtl = false);
+public sealed record CreateApplicationRequest(
+    string Name,
+    string BaseLanguageCode,
+    string? Code = null,
+    string? Description = null,
+    bool IsShared = false,
+    IReadOnlyList<string>? EnabledLanguageCodes = null);
 
-public sealed record UpdateLocaleRequest(string? DisplayName = null, bool? IsRtl = null);
+public sealed record UpdateApplicationRequest(
+    string? Name = null,
+    string? Description = null,
+    bool? IsShared = null,
+    bool? Active = null,
+    string? BaseLanguageCode = null,
+    IReadOnlyList<string>? EnabledLanguageCodes = null);
+
+// ---- Languages (global) ----------------------------------------------
+
+public sealed record LanguageDto(
+    string Code,
+    string Name,
+    string? FallbackCode,
+    bool IsRtl,
+    bool Active,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record CreateLanguageRequest(
+    string Code,
+    string Name,
+    string? FallbackCode = null,
+    bool IsRtl = false,
+    bool Active = true);
+
+public sealed record UpdateLanguageRequest(
+    string? Name = null,
+    string? FallbackCode = null,
+    bool? IsRtl = null,
+    bool? Active = null);
 
 // ---- Translation keys -----------------------------------------------------
 
 public sealed record TranslationKeyDto(
     Guid Id,
-    Guid ProjectId,
+    string Application,
     string KeyName,
+    string Category,
     string? Description,
+    bool Active,
+    string CreatedBy,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public sealed record CreateTranslationKeyRequest(string KeyName, string? Description = null);
+public sealed record CreateTranslationKeyRequest(
+    string KeyName,
+    string Category,
+    string? Description = null,
+    string? CreatedBy = null);
 
-public sealed record UpdateTranslationKeyRequest(string? Description = null);
+public sealed record UpdateTranslationKeyRequest(
+    string? Category = null,
+    string? Description = null,
+    bool? Active = null);
 
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Total);
 
@@ -57,47 +93,67 @@ public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Total);
 public sealed record TranslationStringDto(
     Guid Id,
     Guid TranslationKeyId,
-    Guid LocaleId,
-    string LocaleCode,
+    string LanguageCode,
     string Value,
-    string ReviewState,
+    string Status,
     string? UpdatedBy,
-    long Version,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public sealed record UpsertTranslationStringRequest(
-    string Value,
-    string? UpdatedBy = null,
-    long? ExpectedVersion = null);
+/// <summary>Last write wins — there is no version token and no 409 on upsert.</summary>
+public sealed record UpsertTranslationStringRequest(string Value, string? UpdatedBy = null);
 
-// ---- Bundles ----------------------------------------------------------
+// ---- Management: grid ------------------------------------------------
 
-/// <summary>
-/// A published, immutable bundle snapshot (mirrors the API's <c>TranslationBundleDto</c>).
-/// <see cref="ETag"/> is the raw lowercase-hex SHA-256 content hash — the wire property is
-/// <c>eTag</c> under the camelCase policy.
-/// </summary>
-public sealed record BundleDto(
-    Guid Id,
-    Guid ProjectId,
-    string LocaleCode,
-    int Version,
-    IReadOnlyDictionary<string, string> Entries,
-    string ETag,
-    string CreatedBy,
-    DateTime CreatedAt);
+public sealed record TranslationValueDto(string Value, string Status);
 
-/// <summary>One row of a locale's publish history — no entries payload.</summary>
-public sealed record BundleVersionDto(
-    int Version,
-    string ETag,
-    DateTime CreatedAt,
-    string CreatedBy,
-    int EntryCount);
+public sealed record TranslationRowDto(
+    Guid KeyId,
+    string Key,
+    string Category,
+    string? Description,
+    IReadOnlyDictionary<string, TranslationValueDto> Values);
 
-/// <summary>Optional body for the publish endpoint; blank / omitted actor falls back to "system".</summary>
-public sealed record PublishBundleRequest(string? PublishedBy = null);
+// ---- Management: dashboard -----------------------------------------
+
+public sealed record LanguageCoverageDto(
+    string LanguageCode,
+    string LanguageName,
+    int TranslatedCount,
+    int TotalKeys,
+    double Percent,
+    int MissingCount);
+
+public sealed record DashboardResponse(
+    int ApplicationCount,
+    int LanguageCount,
+    int KeyCount,
+    IReadOnlyList<LanguageCoverageDto> Coverage,
+    int TotalMissing);
+
+// ---- Management: missing -----------------------------------------
+
+public sealed record MissingTranslationDto(
+    Guid KeyId,
+    string Key,
+    string Category,
+    IReadOnlyList<string> MissingLanguages);
+
+// ---- Management: bulk publish ------------------------------------
+
+public sealed record PublishTranslationsRequest(string Application, string? Language = null);
+
+public sealed record PublishTranslationsResult(int Published);
+
+// ---- Client delivery ------------------------------------------------
+
+public sealed record PublishedTranslationsResponse(
+    string Application,
+    string Language,
+    IReadOnlyDictionary<string, string> Translations);
+
+/// <summary>The delivery body plus the strong <c>ETag</c> validator from the response header.</summary>
+public sealed record PublishedDelivery(PublishedTranslationsResponse Body, string? ETag);
 
 // ---- History / audit trail -------------------------------------------
 
@@ -111,13 +167,15 @@ public sealed record AuditEntryDto(
     DateTime Timestamp,
     string? FromState,
     string? ToState,
-    string? Detail);
+    string? Detail,
+    string? OldValue,
+    string? NewValue);
 
 // ---- Review workflow ----------------------------------------------------
 
 public sealed record ReviewRequest(string Action, string ReviewedBy);
 
-/// <summary>The review verbs the backend accepts, keyed by the state they act on.</summary>
+/// <summary>The review-state names as they appear on the wire (<c>status</c> / <c>fromState</c>).</summary>
 public static class ReviewStates
 {
     public const string Draft = "Draft";
@@ -134,8 +192,8 @@ public static class ReviewActions
     public const string Reopen = "reopen";
     public const string Publish = "publish";
 
-    /// <summary>Legal transitions per current review state (see docs/api.md).</summary>
-    public static IReadOnlyList<(string Action, string Label)> ForState(string reviewState) => reviewState switch
+    /// <summary>Legal review transitions for the string's current <c>status</c> (see docs/api.md).</summary>
+    public static IReadOnlyList<(string Action, string Label)> ForState(string status) => status switch
     {
         ReviewStates.Draft => new[] { (Submit, "Submit for review") },
         ReviewStates.NeedsReview => new[] { (Approve, "Approve"), (Reject, "Reject") },

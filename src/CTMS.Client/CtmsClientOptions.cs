@@ -8,7 +8,7 @@ namespace CTMS.Client;
 
 /// <summary>
 /// Configuration for <see cref="CtmsClient"/>. Only <see cref="BaseAddress"/> (or an injected
-/// <see cref="HttpClient"/> that carries one) and <see cref="ProjectId"/> are required.
+/// <see cref="HttpClient"/> that carries one) and <see cref="Application"/> are required.
 /// </summary>
 public sealed class CtmsClientOptions
 {
@@ -20,14 +20,19 @@ public sealed class CtmsClientOptions
     /// </summary>
     public Uri? BaseAddress { get; set; }
 
-    /// <summary>The CTMS project whose bundles this client fetches.</summary>
-    public Guid ProjectId { get; set; }
+    /// <summary>
+    /// The application <b>code</b> (the <c>Project</c> slug, e.g. <c>icoach</c>) whose published
+    /// translations this client fetches. Required; an empty value throws at construction.
+    /// </summary>
+    public string Application { get; set; } = string.Empty;
 
     /// <summary>
-    /// Locale used as the last link of the fallback chain before the key itself
-    /// (see <see cref="ICtmsClient.Get(string, string, string[])"/>). Optional.
+    /// Language used as the last link of the client-side fallback chain before the key itself
+    /// (see <see cref="ICtmsClient.Get(string, string, string[])"/>). Optional. The API already
+    /// fills gaps server-side from each language's <c>FallbackCode</c> chain; this is a secondary
+    /// safety net for keys resolved across several prefetched languages.
     /// </summary>
-    public string? DefaultLocale { get; set; }
+    public string? DefaultLanguage { get; set; }
 
     /// <summary>
     /// Static bearer token / API key sent as <c>Authorization: Bearer &lt;token&gt;</c>. Only needed
@@ -50,21 +55,22 @@ public sealed class CtmsClientOptions
     public HttpClient? HttpClient { get; set; }
 
     /// <summary>
-    /// Directory for the on-disk bundle cache. When set (and <see cref="BundleStore"/> is null) a
-    /// <see cref="FileBundleStore"/> rooted here is used; when null the cache is in-memory only.
+    /// Directory for the on-disk translation cache. When set (and <see cref="TranslationStore"/> is
+    /// null) a <see cref="FileTranslationStore"/> rooted here is used; when null the cache is
+    /// in-memory only.
     /// </summary>
     public string? CacheDirectory { get; set; }
 
     /// <summary>
     /// Explicit cache implementation. Overrides <see cref="CacheDirectory"/> when set.
     /// </summary>
-    public IBundleStore? BundleStore { get; set; }
+    public ITranslationStore? TranslationStore { get; set; }
 
     /// <summary>
-    /// How long a cached "latest" bundle is served without contacting the API. Within this window
-    /// <see cref="ICtmsClient.GetBundleAsync(string, CancellationToken)"/> returns the cached copy
-    /// directly; past it, the call revalidates with <c>If-None-Match</c>. Default
-    /// <see cref="TimeSpan.Zero"/> (always revalidate). Pinned-version fetches ignore this.
+    /// How long a cached translation set is served without contacting the API. Within this window
+    /// <see cref="ICtmsClient.GetTranslationsAsync(string, CancellationToken)"/> returns the cached
+    /// copy directly; past it, the call revalidates with <c>If-None-Match</c>. Default
+    /// <see cref="TimeSpan.Zero"/> (always revalidate).
     /// </summary>
     public TimeSpan StalenessTtl { get; set; } = TimeSpan.Zero;
 
@@ -72,7 +78,7 @@ public sealed class CtmsClientOptions
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Optional last-resort mapping for a key that no locale in the chain resolves, used by the
+    /// Optional last-resort mapping for a key that no language in the chain resolves, used by the
     /// non-nullable <see cref="ICtmsClient.Get(string, string, string[])"/>. When null (or it
     /// returns null) the key itself is returned.
     /// </summary>

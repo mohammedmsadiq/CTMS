@@ -1,0 +1,402 @@
+@page "/applications/{Code}/grid"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@implements IDisposable
+@inject CtmsApiClient Api
+@inject CurrentUser CurrentUser
+@inject IAuthorizationService Authorization
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>Grid — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
+        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Grid</li>
+    </ol>
+</nav>
+
+<h1 class="h3 mb-3">Translation grid</h1>
+
+<div class="row g-2 align-items-end mb-3">
+    <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1" for="grid-cat">Category</label>
+        <select id="grid-cat" class="form-select form-select-sm" value="@_category" @onchange="OnCategoryChanged">
+            <option value="">All categories</option>
+            @foreach (var cat in _categories)
+            {
+                <option value="@cat">@cat</option>
+            }
+        </select>
+    </div>
+    <div class="col-sm-5 col-md-4">
+        <label class="form-label small mb-1" for="grid-search">Search</label>
+        <input id="grid-search" class="form-control form-control-sm" placeholder="key name or value"
+               value="@_search" @oninput="OnSearchInput" />
+    </div>
+    @if (_allLanguages.Count > 0)
+    {
+        <div class="col-sm-3 col-md-3">
+            <details class="small">
+                <summary class="form-label mb-1">Columns (@_visibleLanguages.Count/@_allLanguages.Count)</summary>
+                <div class="border rounded p-2 mt-1 d-flex flex-wrap gap-2 bg-body">
+                    @foreach (var lang in _allLanguages)
+                    {
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="@($"col-{lang}")"
+                                   checked="@_visibleLanguages.Contains(lang)"
+                                   @onchange="e => ToggleColumn(lang, (bool)e.Value!)" />
+                            <label class="form-check-label" for="@($"col-{lang}")">@lang</label>
+                        </div>
+                    }
+                </div>
+            </details>
+        </div>
+    }
+</div>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading grid…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="ReloadAsync" />
+}
+else if (_rows.Count == 0)
+{
+    <EmptyState Title="Nothing to show"
+                Hint="No keys match the current filters, or this application has no keys yet." />
+}
+else
+{
+    <div class="grid-scroll border rounded">
+        <table class="table table-bordered align-middle mb-0 grid-table">
+            <thead>
+                <tr>
+                    <th scope="col" class="key-col">Key</th>
+                    @foreach (var lang in Columns)
+                    {
+                        <th scope="col" class="lang-col @(IsRtl(lang) ? "rtl" : null)">
+                            @lang
+                            @if (IsRtl(lang))
+                            {
+                                <span class="badge text-bg-light ms-1">RTL</span>
+                            }
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _rows)
+                {
+                    <tr>
+                        <th scope="row" class="key-col fw-normal">
+                            <code>@row.Key</code>
+                            <div class="text-muted small">
+                                <span class="badge text-bg-light">@row.Category</span>
+                                @if (!string.IsNullOrWhiteSpace(row.Description))
+                                {
+                                    <span class="ms-1">@row.Description</span>
+                                }
+                            </div>
+                        </th>
+                        @foreach (var lang in Columns)
+                        {
+                            var editing = IsEditing(row.KeyId, lang);
+                            var has = row.Values.TryGetValue(lang, out var cell);
+                            <td class="grid-cell @(IsRtl(lang) ? "rtl" : null) @(has ? null : "missing")"
+                                dir="@(IsRtl(lang) ? "rtl" : "ltr")">
+                                @if (editing)
+                                {
+                                    <textarea class="form-control form-control-sm" rows="2"
+                                              dir="@(IsRtl(lang) ? "rtl" : "ltr")"
+                                              aria-label="@($"{row.Key} — {lang}")"
+                                              @bind="_editValue" @bind:event="oninput"></textarea>
+                                    @if (_editError is not null)
+                                    {
+                                        <div class="text-danger small mt-1">@_editError.Message</div>
+                                    }
+                                    <div class="d-flex gap-1 mt-1">
+                                        <button class="btn btn-sm btn-primary"
+                                                disabled="@(_editBusy || string.IsNullOrWhiteSpace(_editValue))"
+                                                @onclick="() => SaveCellAsync(row, lang)">
+                                            @if (_editBusy)
+                                            {
+                                                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                            }
+                                            Save
+                                        </button>
+                                        <button class="btn btn-sm btn-link" disabled="@_editBusy" @onclick="CancelEdit">Cancel</button>
+                                    </div>
+                                }
+                                else if (has)
+                                {
+                                    <div class="@(_canEdit ? "cursor-pointer" : null) cell-view"
+                                         @onclick="() => BeginEdit(row, lang, cell!.Value)">
+                                        <div class="cell-value">@cell!.Value</div>
+                                        <ReviewStateBadge State="@cell.Status" />
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="@(_canEdit ? "cursor-pointer" : null) cell-view text-muted"
+                                         @onclick="() => BeginEdit(row, lang, string.Empty)">
+                                        <span aria-hidden="true">—</span>
+                                        <span class="visually-hidden">Missing</span>
+                                    </div>
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-2">
+        <span class="text-muted small">
+            Showing @(_total == 0 ? 0 : _skip + 1)–@Math.Min(_skip + _take, _total) of @_total
+        </span>
+        <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" @onclick="PrevPage" disabled="@(_skip == 0 || _loading)">Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPage" disabled="@(_skip + _take >= _total || _loading)">Next</button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+    [SupplyParameterFromQuery] public string? Category { get; set; }
+    [SupplyParameterFromQuery] public string? Search { get; set; }
+
+    private const int _take = 50;
+    private int _skip;
+    private int _total;
+
+    private string _category = "";
+    private string _search = "";
+
+    private bool _loading = true;
+    private bool _canEdit;
+    private ApiError? _loadError;
+
+    private readonly List<GridRow> _rows = new();
+    private readonly List<string> _allLanguages = new();
+    private readonly HashSet<string> _visibleLanguages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _rtl = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<string> _categories = Array.Empty<string>();
+
+    private (Guid KeyId, string Lang)? _editKey;
+    private string _editValue = "";
+    private bool _editBusy;
+    private ApiError? _editError;
+
+    private CancellationTokenSource? _searchDebounce;
+    private string? _loadedCode;
+
+    private IEnumerable<string> Columns => _allLanguages.Where(_visibleLanguages.Contains);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedCode == Code)
+        {
+            return;
+        }
+
+        _loadedCode = Code;
+        _category = Category ?? "";
+        _search = Search ?? "";
+        _skip = 0;
+
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        _canEdit = (await Authorization.AuthorizeAsync(authState.User, AuthorizationPolicies.CanEditStrings)).Succeeded;
+
+        await LoadMetadataAsync();
+        await LoadGridAsync();
+    }
+
+    private async Task LoadMetadataAsync()
+    {
+        _allLanguages.Clear();
+        _visibleLanguages.Clear();
+        _rtl.Clear();
+
+        var appTask = Api.GetApplicationAsync(Code);
+        var langTask = Api.GetLanguagesAsync(includeInactive: true);
+        var catTask = Api.GetCategoriesAsync(Code);
+        await Task.WhenAll(appTask, langTask, catTask);
+
+        if (appTask.Result.IsFailure)
+        {
+            _loadError = appTask.Result.Error;
+            return;
+        }
+
+        foreach (var code in appTask.Result.Value!.EnabledLanguageCodes)
+        {
+            _allLanguages.Add(code);
+            _visibleLanguages.Add(code);
+        }
+
+        if (langTask.Result.IsSuccess)
+        {
+            foreach (var lang in langTask.Result.Value!.Where(l => l.IsRtl))
+            {
+                _rtl.Add(lang.Code);
+            }
+        }
+
+        _categories = catTask.Result.IsSuccess ? catTask.Result.Value! : Array.Empty<string>();
+    }
+
+    private async Task LoadGridAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _editKey = null;
+        StateHasChanged();
+
+        var result = await Api.GetGridAsync(
+            Code,
+            string.IsNullOrWhiteSpace(_category) ? null : _category,
+            language: null,
+            string.IsNullOrWhiteSpace(_search) ? null : _search,
+            _skip,
+            _take);
+
+        if (result.IsSuccess)
+        {
+            _total = result.Value!.Total;
+            _rows.Clear();
+            foreach (var r in result.Value.Items)
+            {
+                _rows.Add(new GridRow(
+                    r.KeyId, r.Key, r.Category, r.Description,
+                    r.Values.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase)));
+            }
+
+            if (_skip > 0 && _rows.Count == 0 && _total > 0)
+            {
+                _skip = Math.Max(0, _skip - _take);
+                await LoadGridAsync();
+                return;
+            }
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+
+        _loading = false;
+    }
+
+    private Task ReloadAsync() => LoadGridAsync();
+
+    private Task OnCategoryChanged(ChangeEventArgs e)
+    {
+        _category = e.Value?.ToString() ?? "";
+        _skip = 0;
+        return LoadGridAsync();
+    }
+
+    private async Task OnSearchInput(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? "";
+        _searchDebounce?.Cancel();
+        _searchDebounce = new CancellationTokenSource();
+        var token = _searchDebounce.Token;
+        try
+        {
+            await Task.Delay(300, token);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        _skip = 0;
+        await LoadGridAsync();
+    }
+
+    private void ToggleColumn(string lang, bool on)
+    {
+        if (on)
+        {
+            _visibleLanguages.Add(lang);
+        }
+        else if (_visibleLanguages.Count > 1)
+        {
+            _visibleLanguages.Remove(lang);
+        }
+    }
+
+    private Task NextPage()
+    {
+        _skip += _take;
+        return LoadGridAsync();
+    }
+
+    private Task PrevPage()
+    {
+        _skip = Math.Max(0, _skip - _take);
+        return LoadGridAsync();
+    }
+
+    private bool IsRtl(string lang) => _rtl.Contains(lang);
+
+    private bool IsEditing(Guid keyId, string lang) =>
+        _editKey is { } k && k.KeyId == keyId && string.Equals(k.Lang, lang, StringComparison.OrdinalIgnoreCase);
+
+    private void BeginEdit(GridRow row, string lang, string current)
+    {
+        if (!_canEdit)
+        {
+            return;
+        }
+
+        _editKey = (row.KeyId, lang);
+        _editValue = current;
+        _editError = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editKey = null;
+        _editError = null;
+    }
+
+    private async Task SaveCellAsync(GridRow row, string lang)
+    {
+        _editBusy = true;
+        _editError = null;
+
+        var result = await Api.UpsertStringAsync(
+            Code, row.KeyId, lang, new UpsertTranslationStringRequest(_editValue, CurrentUser.DisplayName));
+        _editBusy = false;
+
+        if (result.IsSuccess)
+        {
+            var dto = result.Value!;
+            row.Values[lang] = new TranslationValueDto(dto.Value, dto.Status);
+            _editKey = null;
+        }
+        else
+        {
+            _editError = result.Error;
+        }
+    }
+
+    public void Dispose() => _searchDebounce?.Cancel();
+
+    private sealed class GridRow(
+        Guid keyId, string key, string category, string? description,
+        Dictionary<string, TranslationValueDto> values)
+    {
+        public Guid KeyId { get; } = keyId;
+        public string Key { get; } = key;
+        public string Category { get; } = category;
+        public string? Description { get; } = description;
+        public Dictionary<string, TranslationValueDto> Values { get; } = values;
+    }
+}

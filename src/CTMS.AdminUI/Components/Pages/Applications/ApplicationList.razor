@@ -1,0 +1,233 @@
+@page "/applications"
+@using System.ComponentModel.DataAnnotations
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Applications — CTMS Admin</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Applications</h1>
+    <AuthorizeView Policy="@AuthorizationPolicies.CanAdminProjects">
+        <button class="btn btn-primary" @onclick="ToggleCreate" disabled="@(_languages is null)">
+            @(_showCreate ? "Close" : "New application")
+        </button>
+    </AuthorizeView>
+</div>
+
+@if (_showCreate && _languages is not null)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Create an application</h2>
+            <EditForm Model="_form" OnValidSubmit="CreateAsync">
+                <DataAnnotationsValidator />
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="a-name">Name</label>
+                        <InputText id="a-name" class="form-control" @bind-Value="_form.Name" />
+                        <ValidationMessage For="() => _form.Name" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="a-code">Code <span class="text-muted">(optional — derived from name)</span></label>
+                        <InputText id="a-code" class="form-control" placeholder="icoach" @bind-Value="_form.Code" />
+                        <ValidationMessage For="() => _form.Code" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="a-base">Base language</label>
+                        <InputSelect id="a-base" class="form-select" @bind-Value="_form.BaseLanguageCode">
+                            <option value="">Choose…</option>
+                            @foreach (var lang in _languages)
+                            {
+                                <option value="@lang.Code">@lang.Name (@lang.Code)</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _form.BaseLanguageCode" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="a-desc">Description <span class="text-muted">(optional)</span></label>
+                        <InputText id="a-desc" class="form-control" @bind-Value="_form.Description" />
+                    </div>
+                    <div class="col-12">
+                        <span class="form-label d-block">Enabled languages</span>
+                        <div class="d-flex flex-wrap gap-3">
+                            @foreach (var lang in _languages)
+                            {
+                                var code = lang.Code;
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="@($"en-{code}")"
+                                           checked="@_enabled.Contains(code)"
+                                           @onchange="e => ToggleEnabled(code, (bool)e.Value!)" />
+                                    <label class="form-check-label" for="@($"en-{code}")">@lang.Code</label>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    <div class="col-12 form-check ms-1">
+                        <InputCheckbox id="a-shared" class="form-check-input" @bind-Value="_form.IsShared" />
+                        <label class="form-check-label" for="a-shared">
+                            Shared — its published strings merge into every application
+                        </label>
+                    </div>
+                </div>
+                <ErrorAlert Error="_createError" />
+                <div class="mt-3">
+                    <button type="submit" class="btn btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                        }
+                        Create
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading applications…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_apps is { Count: 0 })
+{
+    <EmptyState Title="No applications yet" Hint="Create the first application to start managing translations." />
+}
+else if (_apps is not null)
+{
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Code</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Active</th>
+                    <th scope="col" class="text-end">Languages</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var app in _apps)
+                {
+                    <tr class="cursor-pointer" @onclick="() => Open(app.Code)">
+                        <td><a href="@($"applications/{app.Code}")"><code>@app.Code</code></a></td>
+                        <td>@app.Name</td>
+                        <td>
+                            @if (app.IsShared)
+                            {
+                                <span class="badge text-bg-info">shared</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">—</span>
+                            }
+                        </td>
+                        <td>@(app.Active ? "Yes" : "No")</td>
+                        <td class="text-end">@app.EnabledLanguageCodes.Count</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showCreate;
+    private ApiError? _loadError;
+    private ApiError? _createError;
+    private IReadOnlyList<ApplicationDto>? _apps;
+    private IReadOnlyList<LanguageDto>? _languages;
+    private readonly HashSet<string> _enabled = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CreateApplicationForm _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        var languages = await Api.GetLanguagesAsync();
+        if (languages.IsSuccess)
+        {
+            _languages = languages.Value;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        var result = await Api.GetApplicationsAsync(includeInactive: true);
+        if (result.IsSuccess)
+        {
+            _apps = result.Value;
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private void ToggleCreate() => _showCreate = !_showCreate;
+
+    private void ToggleEnabled(string code, bool on)
+    {
+        if (on)
+        {
+            _enabled.Add(code);
+        }
+        else
+        {
+            _enabled.Remove(code);
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        _createError = null;
+        var request = new CreateApplicationRequest(
+            _form.Name.Trim(),
+            _form.BaseLanguageCode.Trim(),
+            string.IsNullOrWhiteSpace(_form.Code) ? null : _form.Code.Trim(),
+            string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim(),
+            _form.IsShared,
+            _enabled.Count == 0 ? null : _enabled.ToArray());
+
+        var result = await Api.CreateApplicationAsync(request);
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            Nav.NavigateTo($"applications/{result.Value!.Code}");
+        }
+        else
+        {
+            _createError = result.Error;
+        }
+    }
+
+    private void Open(string code) => Nav.NavigateTo($"applications/{code}");
+
+    private sealed class CreateApplicationForm
+    {
+        [Required, StringLength(200, MinimumLength = 1)]
+        public string Name { get; set; } = "";
+
+        [Required(ErrorMessage = "Choose a base language.")]
+        [Display(Name = "Base language")]
+        public string BaseLanguageCode { get; set; } = "";
+
+        [RegularExpression("^[a-z0-9]+(?:-[a-z0-9]+)*$", ErrorMessage = "Lower-case letters, digits and hyphens only.")]
+        public string? Code { get; set; }
+
+        [StringLength(500)]
+        public string? Description { get; set; }
+
+        public bool IsShared { get; set; }
+    }
+}

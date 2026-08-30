@@ -1,0 +1,212 @@
+@page "/applications/{Code}/publish"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+
+<PageTitle>Publish — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
+        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Publish</li>
+    </ol>
+</nav>
+
+<h1 class="h3 mb-3">Publish translations</h1>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h2 class="h5">Promote approved strings</h2>
+        <p class="text-muted small">
+            Moves every <code>Approved</code> string for this application (optionally one language)
+            to <code>Published</code> and refreshes the delivery cache.
+        </p>
+        <div class="row g-2 align-items-end">
+            <div class="col-sm-4 col-md-3">
+                <label class="form-label small mb-1" for="pub-lang">Language</label>
+                <select id="pub-lang" class="form-select form-select-sm" @bind="_language">
+                    <option value="">All enabled languages</option>
+                    @foreach (var lang in _languages)
+                    {
+                        <option value="@lang">@lang</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <AuthorizeView Policy="@AuthorizationPolicies.CanPublish" Context="pub">
+                    <Authorized>
+                        <button class="btn btn-primary" disabled="@_publishing" @onclick="PublishAsync">
+                            @if (_publishing)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                            }
+                            Publish
+                        </button>
+                    </Authorized>
+                    <NotAuthorized>
+                        <button class="btn btn-primary" disabled>Publish</button>
+                        <span class="text-muted small ms-2">Requires the publish role.</span>
+                    </NotAuthorized>
+                </AuthorizeView>
+            </div>
+        </div>
+        <ErrorAlert Error="_publishError" />
+        @if (_lastResult is not null)
+        {
+            <div class="alert alert-success mt-3 mb-0">
+                Published <strong>@_lastResult.Published</strong>
+                string@(_lastResult.Published == 1 ? "" : "s").
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <h2 class="h5">Delivery preview</h2>
+        <p class="text-muted small">
+            The assemble-on-demand map a client would receive — this application's published
+            strings merged with every shared application's, fallbacks applied.
+        </p>
+        <div class="row g-2 align-items-end mb-2">
+            <div class="col-sm-4 col-md-3">
+                <label class="form-label small mb-1" for="prev-lang">Language</label>
+                <select id="prev-lang" class="form-select form-select-sm" value="@_previewLanguage" @onchange="OnPreviewLanguageChanged">
+                    <option value="">Choose a language…</option>
+                    @foreach (var lang in _languages)
+                    {
+                        <option value="@lang">@lang</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        @if (_previewLoading)
+        {
+            <LoadingSpinner Message="Assembling…" />
+        }
+        else if (_previewError is not null)
+        {
+            <ErrorAlert Error="_previewError" />
+        }
+        else if (_preview is not null)
+        {
+            <p class="small mb-2">
+                <span class="text-muted">ETag</span> <code>@(_preview.ETag ?? "—")</code>
+                <span class="text-muted ms-3">Entries</span> <strong>@_preview.Body.Translations.Count</strong>
+            </p>
+            @if (_preview.Body.Translations.Count == 0)
+            {
+                <EmptyState Title="Nothing published"
+                            Hint="No key has a published value for this language yet." />
+            }
+            else
+            {
+                <div class="table-responsive" style="max-height: 28rem;">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th scope="col">Key</th>
+                                <th scope="col">Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var entry in _preview.Body.Translations)
+                            {
+                                <tr>
+                                    <td><code>@entry.Key</code></td>
+                                    <td>@entry.Value</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+
+    private string _language = "";
+    private bool _publishing;
+    private ApiError? _publishError;
+    private PublishTranslationsResult? _lastResult;
+
+    private IReadOnlyList<string> _languages = Array.Empty<string>();
+
+    private string _previewLanguage = "";
+    private bool _previewLoading;
+    private ApiError? _previewError;
+    private PublishedDelivery? _preview;
+    private string? _loadedCode;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedCode == Code)
+        {
+            return;
+        }
+
+        _loadedCode = Code;
+        _language = "";
+        _previewLanguage = "";
+        _preview = null;
+        _lastResult = null;
+        var app = await Api.GetApplicationAsync(Code);
+        _languages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
+    }
+
+    private async Task PublishAsync()
+    {
+        _publishing = true;
+        _publishError = null;
+        _lastResult = null;
+        var result = await Api.PublishAsync(Code, string.IsNullOrWhiteSpace(_language) ? null : _language);
+        _publishing = false;
+
+        if (result.IsSuccess)
+        {
+            _lastResult = result.Value;
+            if (_preview is not null && !string.IsNullOrEmpty(_previewLanguage))
+            {
+                await LoadPreviewAsync();
+            }
+        }
+        else
+        {
+            _publishError = result.Error;
+        }
+    }
+
+    private Task OnPreviewLanguageChanged(ChangeEventArgs e)
+    {
+        _previewLanguage = e.Value?.ToString() ?? "";
+        return LoadPreviewAsync();
+    }
+
+    private async Task LoadPreviewAsync()
+    {
+        if (string.IsNullOrEmpty(_previewLanguage))
+        {
+            _preview = null;
+            return;
+        }
+
+        _previewLoading = true;
+        _previewError = null;
+        var result = await Api.GetPublishedTranslationsAsync(Code, _previewLanguage);
+        _previewLoading = false;
+
+        if (result.IsSuccess)
+        {
+            _preview = result.Value;
+        }
+        else
+        {
+            _preview = null;
+            _previewError = result.Error;
+        }
+    }
+}

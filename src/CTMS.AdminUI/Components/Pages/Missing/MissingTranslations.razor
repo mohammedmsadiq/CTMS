@@ -1,0 +1,163 @@
+@page "/applications/{Code}/missing"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Missing — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
+        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Missing</li>
+    </ol>
+</nav>
+
+<h1 class="h3 mb-3">Missing translations</h1>
+
+<p class="text-muted small">
+    Keys with at least one target language that has no non-<code>Draft</code> value. Click a
+    language chip to jump to that key on the grid.
+</p>
+
+<div class="row g-2 align-items-end mb-3">
+    <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1" for="miss-lang">Language</label>
+        <select id="miss-lang" class="form-select form-select-sm" value="@_language" @onchange="OnLanguageChanged">
+            <option value="">All enabled languages</option>
+            @foreach (var lang in _languages)
+            {
+                <option value="@lang">@lang</option>
+            }
+        </select>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_page is { Total: 0 })
+{
+    <EmptyState Title="Nothing missing" Hint="Every key has a value in every target language." />
+}
+else if (_page is not null)
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Key</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Missing in</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _page.Items)
+                {
+                    <tr>
+                        <td><code>@row.Key</code></td>
+                        <td><span class="badge text-bg-light">@row.Category</span></td>
+                        <td>
+                            @foreach (var lang in row.MissingLanguages)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-warning me-1 mb-1"
+                                        @onclick="() => OpenInGrid(row.Key)">
+                                    @lang
+                                </button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center">
+        <span class="text-muted small">
+            Showing @(_page.Total == 0 ? 0 : _skip + 1)–@Math.Min(_skip + _take, _page.Total) of @_page.Total
+        </span>
+        <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" @onclick="PrevPage" disabled="@(_skip == 0 || _loading)">Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPage" disabled="@(_skip + _take >= _page.Total || _loading)">Next</button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+
+    private const int _take = 50;
+    private int _skip;
+    private string _language = "";
+
+    private bool _loading = true;
+    private ApiError? _loadError;
+    private PagedResult<MissingTranslationDto>? _page;
+    private IReadOnlyList<string> _languages = Array.Empty<string>();
+    private string? _loadedCode;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedCode != Code)
+        {
+            _loadedCode = Code;
+            _skip = 0;
+            _language = "";
+            var app = await Api.GetApplicationAsync(Code);
+            _languages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        var result = await Api.GetMissingAsync(
+            Code, string.IsNullOrWhiteSpace(_language) ? null : _language, _skip, _take);
+        if (result.IsSuccess)
+        {
+            _page = result.Value;
+            if (_skip > 0 && _page!.Items.Count == 0 && _page.Total > 0)
+            {
+                _skip = Math.Max(0, _skip - _take);
+                _loading = false;
+                await LoadAsync();
+                return;
+            }
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private Task OnLanguageChanged(ChangeEventArgs e)
+    {
+        _language = e.Value?.ToString() ?? "";
+        _skip = 0;
+        return LoadAsync();
+    }
+
+    private Task NextPage()
+    {
+        _skip += _take;
+        return LoadAsync();
+    }
+
+    private Task PrevPage()
+    {
+        _skip = Math.Max(0, _skip - _take);
+        return LoadAsync();
+    }
+
+    private void OpenInGrid(string key) =>
+        Nav.NavigateTo($"applications/{Code}/grid?search={Uri.EscapeDataString(key)}");
+}
