@@ -17,9 +17,14 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApplicationExceptionHandler>();
 
-// Entra ID JWT bearer + the CTMS authorization policies (see CTMS.Api/Auth). When
-// Auth:Enabled=false (local dev / tests) a permissive all-roles bypass scheme is used instead.
+// Entra ID JWT bearer (or an X-Api-Key machine key) + the CTMS authorization policies (see
+// CTMS.Api/Auth). When Auth:Enabled=false (local dev / tests) a permissive all-roles bypass
+// scheme is used instead.
 builder.AddCtmsAuth();
+
+// Publish webhooks: a bounded channel drained by a BackgroundService. No-op when
+// Webhooks:Enabled=false.
+builder.Services.AddCtmsWebhooks(builder.Configuration);
 
 // Cross-origin policy "ctms" (empty Cors:AllowedOrigins ⇒ no cross-origin access), a global
 // partitioned rate limiter (off when RateLimit:Enabled=false), and a Redis-backed Data
@@ -117,6 +122,8 @@ app.MapBulkReviewEndpoints();
 app.MapTranslationImportEndpoints();
 app.MapTranslationEndpoints();
 app.MapAuditEndpoints();
+app.MapApiKeyEndpoints();
+app.MapWebhookEndpoints();
 
 app.Run();
 

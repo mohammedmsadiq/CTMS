@@ -8,9 +8,10 @@ can cross-reference `src/CTMS.Application`.
 - Base URL in local dev: `http://localhost:5147` (Swagger UI at `/swagger` in
   the `Development` environment). In the container / compose it is
   `http://localhost:8080`.
-- **Authentication is required** (Microsoft Entra ID, JWT bearer) on every
-  `/api/*` endpoint except the **client delivery reads**, which are anonymous by
-  default (`Auth:PublicBundleReads=true`) — see
+- **Authentication is required** (Microsoft Entra ID JWT bearer, or an
+  `X-Api-Key` header for read-only machine callers) on every `/api/*` endpoint
+  except the **client delivery reads**, which are anonymous by default
+  (`Auth:PublicBundleReads=true`) — see
   [Authentication & authorization](#authentication--authorization). `/health`,
   `/health/ready` and Swagger are always anonymous.
 - A local-dev / test escape hatch (`Auth:Enabled=false`) authenticates every
@@ -110,6 +111,33 @@ a real bearer token** — the actor recorded in the row and the audit trail is t
 token identity (`name`, then `preferred_username`, then `oid`). The body field
 still applies when auth is disabled or the request is anonymous. See
 `src/CTMS.Api/Auth/TokenActor.cs`.
+
+### API keys — read-only machine access
+
+A machine caller (a CI job, an SSR site, a CDN origin) that only needs to *read*
+translations can authenticate with a long-lived key instead of acquiring an Entra
+token per request:
+
+- The key travels in an **`X-Api-Key`** request header.
+- It authenticates a read-only principal holding the single role `ctms.reader`,
+  so it satisfies `CanRead` and nothing else — every write policy still returns
+  `403`.
+- The `X-Api-Key` scheme is **composed with** the JWT bearer scheme: a request
+  may present either. Bearer is tried first; a request with no bearer token but a
+  valid `X-Api-Key` is authenticated as the reader principal.
+- Keys are stored **hashed** (`apiKeys` collection); the raw key is shown **once**
+  at creation and never again. Each key tracks `LastUsedAt`.
+- The scheme is active whenever `Auth:Enabled=true`. With `Auth:Enabled=false`
+  (local dev / tests) the all-roles bypass covers everything and `X-Api-Key` is
+  not consulted.
+
+| Method & route | Body | Success | Errors | Policy |
+|----------------|------|---------|--------|--------|
+| `GET /api/api-keys` | — | `200` — key metadata (`id`, `name`, `createdAt`, `lastUsedAt?`); **never** the raw key or its hash | — | `CanAdminProjects` |
+| `POST /api/api-keys` | `{ name }` | `201` — the created key **including the raw secret, once** | `400` blank name | `CanAdminProjects` |
+| `DELETE /api/api-keys/{id}` | — | `204` | `404` unknown id | `CanAdminProjects` |
+
+Deleting a key revokes it immediately.
 
 ---
 
@@ -220,16 +248,23 @@ UpdateApplicationRequest { name?, description?, isShared?, active?,
 ## Languages
 
 Global `Language` catalogue, keyed by BCP-47 `code`. DTOs: `LanguageDto`,
-`CreateLanguageRequest`, `UpdateLanguageRequest`.
+`CreateLanguageRequest`, `UpdateLanguageRequest`, `LanguageSuggestionDto`,
+`BulkCreateLanguagesRequest`, `BulkCreateLanguagesResult`.
 
 ```
-CreateLanguageRequest { code, name, fallbackCode?, isRtl? = false, active? = true }
-UpdateLanguageRequest { name?, fallbackCode?, isRtl?, active? }   // omitted members unchanged
+CreateLanguageRequest        { code, name, fallbackCode?, isRtl? = false, active? = true }
+UpdateLanguageRequest        { name?, fallbackCode?, isRtl?, active? }   // omitted members unchanged
+LanguageSuggestionDto        { code, name, isRtl }
+BulkCreateLanguageItem       { code, name, fallbackCode?, isRtl? }
+BulkCreateLanguagesRequest   { languages: BulkCreateLanguageItem[] }
+BulkCreateLanguagesResult    { created: string[], skipped: string[] }
 ```
 
 | Method & route | Body | Success | Errors | Policy |
 |----------------|------|---------|--------|--------|
 | `GET /api/languages` | — | `200` `LanguageDto[]` | — | anonymous by default |
+| `GET /api/languages/suggestions` | — | `200` `LanguageSuggestionDto[]` | — | anonymous while `Auth:PublicBundleReads=true`, else `CanRead` |
+| `POST /api/languages/bulk` | `BulkCreateLanguagesRequest` | `200` `BulkCreateLanguagesResult` | `400` empty list, or an entry with a blank `code` / `name` | `CanManageContent` |
 | `GET /api/languages/{code}` | — | `200` `LanguageDto` | `404` unknown | `CanRead` |
 | `POST /api/languages` | `CreateLanguageRequest` | `201` `LanguageDto` + `Location` | `400` validation; `409` code already exists | `CanManageContent` |
 | `PATCH /api/languages/{code}` | `UpdateLanguageRequest` | `200` `LanguageDto` | `400` validation; `404` unknown | `CanManageContent` |
@@ -238,6 +273,16 @@ UpdateLanguageRequest { name?, fallbackCode?, isRtl?, active? }   // omitted mem
 - `fallbackCode` must not equal the language's own `code` (`400`). Set it to `""`
   via `PATCH` to clear it.
 - There is no delete endpoint; set `active=false`.
+- **`GET /api/languages/suggestions`** returns a **static** ~38-entry BCP-47
+  catalogue (`LanguageCatalogue`, `src/CTMS.Application/Languages`) — it is a
+  constant in code, never persisted and never queried. It is what the Admin UI
+  new-application wizard offers as a picklist. RTL entries are the Arabic
+  locales, Hebrew and Persian.
+- **`POST /api/languages/bulk`** registers every entry that does not already
+  exist and is **idempotent**: an existing code (case-insensitive) is returned in
+  `skipped`, not errored; a duplicate code within the same request body is
+  de-duplicated. Only a blank `code` or `name` in an entry, or an empty
+  `languages` array, is `400`. A single `SaveChanges` covers the whole batch.
 
 ---
 
@@ -248,7 +293,7 @@ Nested under an application. DTOs: `TranslationKeyDto`,
 
 ```
 TranslationKeyDto           { id, application, keyName, category, description?, active, createdBy, createdAt, updatedAt }
-CreateTranslationKeyRequest { keyName, category, description?, createdBy? }
+CreateTranslationKeyRequest { keyName, category?, description?, createdBy? }
 UpdateTranslationKeyRequest { category?, description?, active? }   // omitted members unchanged
 PagedResult<T>              { items: T[], total: int }
 ```
@@ -262,8 +307,14 @@ PagedResult<T>              { items: T[], total: int }
 | `DELETE /api/applications/{application}/keys/{keyId:guid}` | — | `204` | `404` | `CanManageContent` |
 
 - `keyName` must match `[A-Za-z0-9_.-]+` (dotted path, e.g.
-  `checkout.button.submit`). `category` is **required** and non-blank on create;
-  `PATCH` with a blank `category` is `400`.
+  `checkout.button.submit`).
+- **`category` is optional on create.** When it is omitted, `null` or blank the
+  service derives one from the key name: the segment before the first `.`,
+  title-cased (`course.start` → `Course`, `nav.home.link` → `Nav`), or `General`
+  when the key has no `.` or nothing usable before it
+  (`CategorySuggestion.FromKeyName`). The stored `Category` is therefore always
+  non-blank. `PATCH` still sets `category` **explicitly** and rejects an
+  explicitly-blank value with `400`.
 - `category` filter on the list is an exact, case-insensitive match.
 - `DELETE` cascades to the key's `TranslationString` rows (repository-level
   multi-collection cleanup).
@@ -357,9 +408,31 @@ The single-string `publish` action needs `CanReview`. The bulk
 
 ## Management
 
-Screens for the admin UI. All `CanRead` except the bulk publish (`CanPublish`).
-Every route takes an optional `?application=<code>` query that scopes it to one
-application; omitted, it spans every active application (the union of their
+The routes the admin UI drives. This section covers **Setup** (get an application
+ready) and **Screens** (the working views); [Bulk operations](#bulk-operations)
+and [Integration](#integration) follow as their own sections. Every *Screen*
+route is `CanRead`.
+
+### Setup
+
+The first-run path — create an application, give it languages, load its keys —
+uses routes documented in full above:
+
+| Step | Route(s) | Section |
+|------|----------|---------|
+| Register languages | `GET /api/languages`, `GET /api/languages/suggestions`, `POST /api/languages`, `POST /api/languages/bulk`, `GET/PATCH /api/languages/{code}` | [Languages](#languages) |
+| Create the application, enable its languages | `POST /api/applications`, `PATCH /api/applications/{code}`, `PUT/DELETE /api/applications/{code}/languages/{language}` | [Applications](#applications) |
+| Load keys and strings | `POST /api/applications/{application}/keys`, `PUT .../strings/{language}`, or **bulk import** (below) | [Translation keys](#translation-keys), [Bulk operations](#bulk-operations) |
+
+`GET /api/languages/suggestions` + `POST /api/languages/bulk` are what the Admin
+UI new-application wizard uses to turn a picklist of common locales into
+`Language` rows in one call. `POST /api/applications/{application}/import` is the
+normal way to populate keys — see [Bulk operations](#bulk-operations).
+
+### Screens
+
+Every screen route takes an optional `?application=<code>` query that scopes it to
+one application; omitted, it spans every active application (the union of their
 enabled languages as columns).
 
 ### `GET /api/translations` — the grid
@@ -367,14 +440,14 @@ enabled languages as columns).
 DTO: `TranslationRowDto`, `TranslationValueDto`, `PagedResult<T>`.
 
 ```
-TranslationValueDto { value, status }
+TranslationValueDto { value, status, source }
 TranslationRowDto   { keyId, key, category, description?,
-                      values: { "<languageCode>": { value, status }, ... } }
+                      values: { "<languageCode>": { value, status, source }, ... } }
 ```
 
 | Query | Success | Errors |
 |-------|---------|--------|
-| `?application=&category=&language=&search=&skip=0&take=50` | `200` `PagedResult<TranslationRowDto>` | `404` when `application` is given but unknown |
+| `?application=&category=&language=&search=&status=&skip=0&take=50` | `200` `PagedResult<TranslationRowDto>` | `400` invalid `status`; `404` when `application` is given but unknown |
 
 - One row per active key, a cell per column language; a language with no string
   for that key is **absent** from `values`.
@@ -383,6 +456,14 @@ TranslationRowDto   { keyId, key, category, description?,
   applications).
 - `category` is an exact case-insensitive filter. `search` matches the key name
   **or** any of the key's string values (case-insensitive substring).
+- **`status`** (optional) is one of the four `ReviewState` names — `Draft`,
+  `NeedsReview`, `Approved`, `Published`; any other value is `400`. It keeps only
+  rows that have **at least one cell** in that state, but each kept row still
+  carries **all** of its cells, so the grid stays coherent.
+- **`source`** on each cell is provenance: `"app"` when the value is the
+  application's own string, or `"shared:<code>"` when it is merged in from a
+  shared application (an app-owned key wins a name collision). `source` is
+  **grid-only** — the client delivery payload does not carry it.
 - `skip` floored at 0; `take` default 50, capped at 200.
 
 ### `GET /api/categories`
@@ -427,6 +508,85 @@ MissingTranslationDto { keyId, key, category, missingLanguages: string[] }
   are returned. `language` narrows the target set to one code.
 - `skip` floored at 0; `take` default 50, capped at 200.
 
+## Bulk operations
+
+Three ways to move many strings at once: load them from a file, run one review
+action across a filtered set, and publish.
+
+### `POST /api/applications/{application}/import` — bulk file import
+
+Policy: `CanManageContent`. DTOs: `ImportTranslationsRequest`,
+`ImportTranslationsResult`, `ImportError`
+(`src/CTMS.Application/Translations/Import`).
+
+```
+ImportTranslationsRequest { format, language, content, category?, status?, dryRun = false }
+ImportError               { line?, key?, message }
+ImportTranslationsResult  { createdKeys, createdStrings, updatedStrings, skipped,
+                            errors: ImportError[], keys: string[] }   // keys ≤ 200 names
+```
+
+| Body | Success | Errors |
+|------|---------|--------|
+| `ImportTranslationsRequest` | `200` `ImportTranslationsResult` | `400` bad `format`, malformed `content` (the `detail` names the line), invalid `status`; `404` unknown application, or `language` not enabled for it |
+
+- **Request-body ceiling.** This endpoint opts (via endpoint metadata) into the
+  larger limit **`Limits:MaxImportBodyBytes`** (default 5&nbsp;MB) instead of the
+  256&nbsp;KB global `Limits:MaxRequestBodyBytes`; an over-cap body is `413`
+  before binding.
+- **`format`** — one of:
+  | `format` | Parser |
+  |----------|--------|
+  | `flat` | `key=value` lines; `#` comment lines and blank lines ignored; the value is trimmed |
+  | `csv` | RFC-4180; a header row must name a `key` column and a `value` column; quoted fields, `""` escapes, embedded newlines |
+  | `json` | a flat `{ "key": "value" }` object, or a nested object flattened with `.` between segments; numbers/booleans stringified, `null` → `""`, arrays rejected |
+  | `resx` | `<data name="…"><value>…</value></data>` elements; comments, `<resheader>`, `xml:space` and typed/file-backed resources (`type=` / `mimetype=`) ignored |
+  A later duplicate key overrides an earlier one; the first occurrence fixes
+  ordering. A body that does not parse for its declared `format` is `400` whose
+  `detail` is `Line <n>: <reason>` where a line number is known.
+- **`language`** must be a registered language that is **enabled** for the
+  application (`404` otherwise).
+- Per parsed `(key, value)`: the `TranslationKey` is **created if missing** — its
+  category is the request `category` if given, else derived from the key name
+  (see [Translation keys](#translation-keys)); `createdBy` is the caller identity.
+  The `TranslationString` for `(key, language)` is then upserted at **`status`**.
+- **`status`** ∈ `Draft` (default) / `NeedsReview` / `Approved`. `Published` is
+  rejected with `400` — publish through the review workflow. The importer walks
+  the string through the review state machine to reach the target state.
+- A key name outside `[A-Za-z0-9_.-]+` is recorded in `errors` (with the raw
+  `key`) and skipped; the rest of the import proceeds.
+- **`dryRun: true`** computes the full plan — counts, `errors`, `keys` — and
+  writes nothing.
+- `skipped` counts entries whose value **and** state already matched. If any
+  imported string enters or leaves `Published`, the delivery cache for
+  `(application, language)` is invalidated once at the end.
+
+### `POST /api/applications/{application}/review-bulk` — bulk review
+
+Policy: `CanReview`. DTOs: `ReviewBulkRequest`, `ReviewBulkResult`.
+
+```
+ReviewBulkRequest { action, language?, category?, keyIds?: guid[], reviewedBy? }
+ReviewBulkResult  { transitioned, skipped }
+```
+
+| Body | Success | Errors |
+|------|---------|--------|
+| `ReviewBulkRequest` | `200` `ReviewBulkResult` | `400` unknown `action`, **or no filter supplied**; `404` unknown application, or `language` not registered |
+
+- `action` ∈ `submit` / `approve` / `reject` / `reopen` / `publish` — the same
+  verbs as the single-string review (`publish` needs `CanReview` here, unlike the
+  standalone `POST /api/translations/publish` which needs `CanPublish`).
+- **At least one of `language` / `category` / `keyIds` is required** — an
+  unfiltered mass transition is refused with `400` so it can never be one click.
+  Filters combine (AND).
+- The action is applied to every matching string that is in a state the
+  transition is **legal** from; **illegal ones are skipped**, not errored, and
+  counted in `skipped`.
+- One audit entry per transitioned string. The delivery cache is invalidated
+  **once at the end** for the languages of strings that entered or left
+  `Published` (shared-application fan-out applies).
+
 ### `POST /api/translations/publish` — bulk publish
 
 DTO: `PublishTranslationsRequest`, `PublishTranslationsResult`. Policy:
@@ -450,6 +610,96 @@ PublishTranslationsResult  { published: int }
 - `published` is the number of strings promoted (`0` when there was nothing
   `Approved` — not an error).
 
+### `GET /api/translations/publish/preview` — publish diff
+
+Policy: `CanRead`. DTO: `PublishPreviewResponse`, `PublishPreviewChange`.
+
+```
+PublishPreviewChange  { key, currentValue?, newValue, kind }   // kind: "added" | "changed"
+PublishPreviewResponse { application, language, changes: PublishPreviewChange[],
+                         addedCount, changedCount }
+```
+
+| Query | Success | Errors |
+|-------|---------|--------|
+| `?application=&language=` | `200` `PublishPreviewResponse` | `400` `application` or `language` missing; `404` unknown/inactive application or language, or language not enabled for the application |
+
+- Shows what a `POST /api/translations/publish` for the **same** `(application,
+  language)` would change in the delivered map: it assembles the current
+  published map and a hypothetical one (the application's `Approved` strings
+  treated as published) and diffs them.
+- `kind` is `"added"` (the key is not delivered today) or `"changed"` (a
+  delivered value would differ — reached today only through the fallback chain).
+- **`language` is required** (`400` otherwise) — unlike bulk publish, there is no
+  all-languages preview.
+
+---
+
+## Integration
+
+Machine-facing surface for CI jobs, SSR sites and downstream caches.
+
+### API keys
+
+Read-only key auth (`X-Api-Key`) and the `POST/GET/DELETE /api/api-keys`
+management routes are documented under
+[Authentication & authorization → API keys](#api-keys--read-only-machine-access).
+
+### Publish webhooks
+
+A `Webhook` (collection `webhooks`) registers an HTTP endpoint that CTMS calls
+after a publish, so a consumer learns a bundle changed without polling `ETag`.
+
+| Method & route | Body | Success | Errors | Policy |
+|----------------|------|---------|--------|--------|
+| `GET /api/webhooks` | — | `200` — webhook metadata (`id`, `url`, `createdAt`); **never** the secret | — | `CanAdminProjects` |
+| `POST /api/webhooks` | `{ url }` | `201` — the created webhook **including the signing secret, once** | `400` bad URL | `CanAdminProjects` |
+| `DELETE /api/webhooks/{id}` | — | `204` | `404` unknown id | `CanAdminProjects` |
+
+**Delivery.** On a successful publish (single-string `publish`, bulk review
+`publish`, or `POST /api/translations/publish`) an async, retrying
+`BackgroundService` `POST`s each registered webhook:
+
+```
+POST <webhook url>
+Content-Type: application/json
+X-CTMS-Signature: sha256=<hex HMAC-SHA256(secret, raw request body)>
+
+{ "event": "published", "application": "<code>", "language": "<code>",
+  "etag": "<content hash>", "publishedAt": "<ISO-8601 UTC>" }
+```
+
+- One request per `(application, language)` that actually changed. `etag` is the
+  same content hash the delivery route returns in its `ETag` header (unquoted
+  here).
+- **Retry.** Up to `Webhooks:MaxAttempts` (default 3) attempts with a per-request
+  timeout of `Webhooks:TimeoutSeconds` (default 5); after the last failure the
+  event is **dropped** (logged, not queued forever). A webhook failure **never**
+  affects the publish or the API response — dispatch is fire-and-forget off a
+  background channel.
+- **Disable** the whole feature with `Webhooks:Enabled=false` (default `true`).
+
+**Verifying the signature** (consumer side):
+
+```
+received = header["X-CTMS-Signature"]              # "sha256=abcd…"
+expected = "sha256=" + hex(hmac_sha256(secret, raw_request_body_bytes))
+if not constant_time_equals(received, expected):
+    reject 401
+# also: bound `publishedAt` to a few minutes to blunt replay
+```
+
+Compute the HMAC over the **raw** body bytes, before any JSON re-serialisation,
+and compare in constant time.
+
+**Config** (see also [architecture.md §8](architecture.md#8-configuration-and-secrets)):
+
+| Key | Env override | Default |
+|-----|--------------|---------|
+| `Webhooks:Enabled` | `Webhooks__Enabled` | `true` |
+| `Webhooks:TimeoutSeconds` | `Webhooks__TimeoutSeconds` | `5` |
+| `Webhooks:MaxAttempts` | `Webhooks__MaxAttempts` | `3` |
+
 ---
 
 ## History / audit trail
@@ -458,7 +708,7 @@ Read-only projection of the append-only audit log. Policy: `CanRead`. DTO:
 `AuditEntryDto`.
 
 ```
-AuditEntryDto { id, projectId, entityType, entityId, action, actor, timestamp,
+AuditEntryDto { id, applicationId, entityType, entityId, action, actor, timestamp,
                 fromState?, toState?, detail?, oldValue?, newValue? }
 ```
 
@@ -468,8 +718,9 @@ AuditEntryDto { id, projectId, entityType, entityId, action, actor, timestamp,
   review state.
 - `oldValue` / `newValue` carry the string value diff: `newValue` on `Created`,
   both on `Edited`, both null on review transitions.
-- `projectId` is the owning application's id (the field keeps its historical
-  name).
+- **`applicationId`** is the owning application's id. The outward DTO field was
+  renamed from `projectId`; the internal `Project` / `ProjectId` domain names are
+  unchanged.
 
 | Method & route | Query | Success | Errors |
 |----------------|-------|---------|--------|

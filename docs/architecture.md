@@ -21,11 +21,18 @@ translations to client applications.
 >   content-hash `ETag` / `If-None-Match` / `304` conditional handling, the
 >   Redis-backed read-through cache and its in-process fallback, and
 >   invalidate-on-publish with shared-application fan-out;
-> - the management screens (`GET /api/translations`, `/api/categories`,
->   `/api/dashboard`, `/api/translations/missing`) and bulk publish
->   (`POST /api/translations/publish`);
+> - the management screens (`GET /api/translations` — with the `status` filter and
+>   the `source` provenance tag on each cell —, `/api/categories`,
+>   `/api/dashboard`, `/api/translations/missing`), bulk publish
+>   (`POST /api/translations/publish`) and its diff preview
+>   (`GET /api/translations/publish/preview`);
+> - the first-run helpers: optional `category` on key create with prefix
+>   derivation, the static language catalogue (`GET /api/languages/suggestions`),
+>   bulk language register (`POST /api/languages/bulk`), bulk file import
+>   (`POST /api/applications/{application}/import`) and bulk review
+>   (`POST /api/applications/{application}/review-bulk`) — see §12;
 > - the `AuditEntry` aggregate with value diffs and the read-only history
->   endpoints;
+>   endpoints (its outward DTO field is now `applicationId`, not `projectId`);
 > - the full MongoDB persistence layer — `AddInfrastructure` wiring,
 >   `CtmsMongoContext`, BSON mapping, all five repositories, the
 >   `MongoHealthCheck` readiness probe, the `MongoIndexInitializer` and
@@ -33,6 +40,11 @@ translations to client applications.
 > - Entra ID JWT-bearer auth + role/policy authorization (§10), with the
 >   `Auth:Enabled=false` dev bypass and the `Auth:PublicBundleReads`
 >   anonymous-delivery path.
+>
+> The **API-key** read-only auth scheme (`X-Api-Key`, `ApiKey` aggregate,
+> `/api/api-keys` routes) and **publish webhooks** (`Webhook` aggregate,
+> `/api/webhooks` routes, an async dispatch `BackgroundService`) are implemented —
+> see §13.
 >
 > `TranslationBundle`, its repository and endpoints, and the
 > `TranslationString.Version` optimistic-concurrency token have been **removed**
@@ -92,10 +104,17 @@ erDiagram
 | **Project** (an *application*) | `Id`, `Name`, `Slug`, `Description?`, `BaseLanguageCode`, `IsShared`, `Active`, `EnabledLanguageCodes` (`IReadOnlyList<string>`), `CreatedAt`, `UpdatedAt` | `Slug` unique, lower-cased, trimmed — it is the application **code** on the client and management routes. `Name` and `BaseLanguageCode` non-blank. `IsShared` marks an application (e.g. `common`) whose published strings merge into every other application's delivered map. `EnabledLanguageCodes` is ordinal, de-duplicated; add/remove validate the language exists and is active. |
 | **TranslationKey** | `Id`, `ProjectId`, `KeyName` (dotted path), `Category`, `Description?`, `Active`, `CreatedBy`, `CreatedAt`, `UpdatedAt` | Unique `(ProjectId, KeyName)`. `KeyName` matches `[A-Za-z0-9_.-]+`. `Category` required, non-blank. Inactive keys are excluded from delivery and coverage. |
 | **TranslationString** | `Id`, `TranslationKeyId`, `LanguageCode` (string, BCP-47), `Value`, `ReviewState`, `UpdatedBy`, `CreatedAt`, `UpdatedAt` | Unique `(TranslationKeyId, LanguageCode)`. `ReviewState` moves only through `ChangeReviewState` (§3). **Last write wins — there is no version / concurrency token.** |
-| **AuditEntry** | `Id`, `ProjectId`, `EntityType` (e.g. `"TranslationString"`), `EntityId`, `Action` (`AuditAction`), `Actor`, `Timestamp` (UTC), `FromState?`, `ToState?` (`ReviewState`), `Detail?`, `OldValue?`, `NewValue?` | Write-once — never updated or deleted, so it has no `CreatedAt`/`UpdatedAt`; `Timestamp` is the single time field. `AuditAction` = `Created`, `Edited`, `Submitted`, `Approved`, `Rejected`, `Reopened`, `Published`. `NewValue` is set on `Created`; `OldValue` and `NewValue` on `Edited`; both null on review transitions. |
+| **AuditEntry** | `Id`, `ProjectId`, `EntityType` (e.g. `"TranslationString"`), `EntityId`, `Action` (`AuditAction`), `Actor`, `Timestamp` (UTC), `FromState?`, `ToState?` (`ReviewState`), `Detail?`, `OldValue?`, `NewValue?` | Write-once — never updated or deleted, so it has no `CreatedAt`/`UpdatedAt`; `Timestamp` is the single time field. `AuditAction` = `Created`, `Edited`, `Submitted`, `Approved`, `Rejected`, `Reopened`, `Published`. `NewValue` is set on `Created`; `OldValue` and `NewValue` on `Edited`; both null on review transitions. **The internal fields keep the `Project*` names; the outward `AuditEntryDto` exposes the owning-application id as `applicationId`.** |
 
 There is no `Locale` aggregate (replaced by the global `Language`) and no
 `TranslationBundle` aggregate (replaced by assemble-on-demand delivery, §4).
+
+### Integration aggregates
+
+| Aggregate | Fields | Collection / indexes |
+|-----------|--------|----------------------|
+| **ApiKey** | `Id`, `Name`, a **hash** of the key (the raw value is never stored), `CreatedAt`, `LastUsedAt?` | `apiKeys`; lookup by key hash. The raw key is returned once at creation. Authenticates a read-only principal (role `ctms.reader`). |
+| **Webhook** | `Id`, `Url`, a **secret** used for request signing (returned once at creation, then stored for HMAC use), `CreatedAt` | `webhooks`. Every registered webhook receives every publish event; there is no per-application scoping in the first cut. |
 
 ---
 
@@ -235,11 +254,26 @@ the same algorithm the old versioned bundle used for its ETag.
 
 ### Access
 
-`GET /api/translations/{application}/{language}`, `GET /api/languages` and
-`GET /api/applications` are **anonymous by default** — they are the SDK / CDN
-delivery path. Setting `Auth:PublicBundleReads=false` makes them require
-`CanRead` instead (§10). The management routes under `/api/translations` (grid,
-missing, publish) and `/api/categories`, `/api/dashboard` always require a token.
+`GET /api/translations/{application}/{language}`, `GET /api/languages`,
+`GET /api/languages/suggestions` and `GET /api/applications` are **anonymous by
+default** — they are the SDK / CDN delivery and wizard-setup path. Setting
+`Auth:PublicBundleReads=false` makes them require `CanRead` instead (§10). The
+management routes under `/api/translations` (grid, missing, publish, publish
+preview) and `/api/categories`, `/api/dashboard` always require a token.
+
+### The management grid vs. client delivery
+
+`GET /api/translations` (the admin grid) assembles from the same data but is a
+different projection:
+
+- **`status` filter** — one of the four `ReviewState` names; keeps only rows with
+  at least one cell in that state while still returning every cell of a kept row,
+  so the grid stays coherent. An invalid value is `400`. Client delivery has no
+  such filter — it only ever sees `Published`.
+- **`source` provenance** — each grid cell is tagged `"app"` or `"shared:<code>"`
+  so an editor can see which values are inherited from a shared application (an
+  app-owned key still wins a name collision). The client delivery payload is a
+  bare `key → value` map and never carries `source`.
 
 ---
 
@@ -379,6 +413,10 @@ in-process distributed-memory cache so a local `dotnet run` needs no Redis.
 | `RateLimit:Enabled` | `RateLimit__Enabled` | Master switch for the global rate limiter (§11) | `true`; `false` in the integration test factory |
 | `RateLimit:PermitPerWindow` / `:WindowSeconds` / `:QueueLimit` / `:BundlePermitPerWindow` | `RateLimit__*` | Fixed-window limiter knobs. `BundlePermitPerWindow` is the looser limit for the anonymous `GET /api/translations/...` delivery partition (partition prefix `delivery:`); its config key keeps the historical `Bundle` name. | `120` / `60` / `0` / `PermitPerWindow × 5` |
 | `Limits:MaxRequestBodyBytes` | `Limits__MaxRequestBodyBytes` | Max request body size (Kestrel + a `413` middleware); `<= 0` ⇒ default (§11) | `262144` (256 KB) |
+| `Limits:MaxImportBodyBytes` | `Limits__MaxImportBodyBytes` | Larger ceiling for `POST /api/applications/{application}/import` only (opted in via endpoint metadata); `<= 0` ⇒ default (§11, §12) | `5242880` (5 MB) |
+| `Webhooks:Enabled` | `Webhooks__Enabled` | Master switch for publish-webhook dispatch (§13) | `true` |
+| `Webhooks:TimeoutSeconds` | `Webhooks__TimeoutSeconds` | Per-request timeout for a webhook `POST` (§13) | `5` |
+| `Webhooks:MaxAttempts` | `Webhooks__MaxAttempts` | Attempts before a webhook event is dropped (§13) | `3` |
 
 > `appsettings.Production.json` only overrides `Cors:AllowedOrigins`,
 > `RateLimit:Enabled`, `Auth:Enabled` and `Seed:Enabled`; the numeric
@@ -403,9 +441,15 @@ in-process distributed-memory cache so a local `dotnet run` needs no Redis.
 ## 9. Testing
 
 Three test projects, all xUnit. `dotnet test` runs them all; the build is
-warnings-as-errors (`Directory.Build.props`), so any warning fails CI. Roughly
-**24 client + 134 application + 65 integration = 223** tests on the current
-branch.
+warnings-as-errors (`Directory.Build.props`), so any warning fails CI. On the
+current branch, **30 client + 196 application + 79 integration = 305** test
+cases (`[Fact]` plus `[Theory]` rows), covering the optional-category
+derivation, the four import parsers and the import service, bulk review, the
+grid `status` filter and `source` tag, the publish diff preview, API-key
+authentication, webhook signing / retry / enqueue, and the
+language catalogue / bulk register. The concurrent API-key / webhook branch adds
+more — treat the totals as approximate and re-count from `CLAUDE.md` once it
+lands.
 
 **`tests/CTMS.Application.Tests`** — application services end to end against real
 repositories on a real MongoDB, plus focused unit tests.
@@ -519,9 +563,115 @@ trade-offs: [ADR&nbsp;0003](adr/0003-production-hardening.md). Config keys: §8.
 |---------|--------|-----------|
 | **CORS** | `CorsSetup` (`UseCors` before auth) | One policy `"ctms"`. `Cors:AllowedOrigins` empty ⇒ no cross-origin access; when set, those origins with any header/method, credentials allowed, `ETag` + `Location` exposed. |
 | **Rate limiting** | `RateLimitingSetup` (`UseRateLimiter` after auth) | Global fixed-window limiter partitioned by token user-id (authenticated) or remote IP; the anonymous `GET /api/translations/...` delivery path gets a separate looser IP partition (partition prefix `delivery:`, limit `RateLimit:BundlePermitPerWindow`). `429` + RFC 7807 + `Retry-After`. `/health*` opt out. Off when `RateLimit:Enabled=false`. |
-| **Request-size cap** | `RequestBodySizeLimit` (middleware, early) | `Limits:MaxRequestBodyBytes` (256 KB default) on Kestrel and via a `413` + RFC 7807 middleware that also covers the test host and chunked bodies. |
+| **Request-size cap** | `RequestBodySizeLimit` (middleware, early) | `Limits:MaxRequestBodyBytes` (256 KB default) on Kestrel and via a `413` + RFC 7807 middleware that also covers the test host and chunked bodies. An endpoint carrying the `LargeImportBody` metadata marker — only `POST /api/applications/{application}/import` — is checked against `Limits:MaxImportBodyBytes` (5 MB default) instead. |
 | **Data Protection** | `DataProtectionSetup` | `SetApplicationName("CTMS")`; key ring persisted to Redis (`ConnectionStrings:Redis`, key `DataProtection-Keys`) so replicas share keys across restarts; local ephemeral fallback + info log when Redis is unset. At-rest key encryption is a `TODO`. |
 | **Structured logging** | `LoggingSetup` | JSON console (`AddJsonConsole`, scopes on, UTC) outside Development; `TraceId`/`SpanId`/`ParentId` on every scope (lines up with the `traceId` on ProblemDetails bodies); one HTTP log line per request (method, path, status, elapsed), `/health*` excluded. |
 
 `docker-compose.prod.yml` is the compose profile that exercises this (auth on,
 `ASPNETCORE_ENVIRONMENT=Production`, Redis required).
+
+---
+
+## 12. Bulk import
+
+`TranslationImportService` (`CTMS.Application/Translations/Import`) loads a
+translation file into one `(application, language)` in a single call — the
+migration path off scattered `.resx` / JSON / CSV / properties files. Route:
+[api.md → Bulk operations](api.md#bulk-operations). Policy `CanManageContent`.
+
+### The parsers
+
+`TranslationFileParser.Parse(format, content)` is **HTTP-free** and returns an
+ordered, de-duplicated list of `(key, value)` entries. Four formats:
+
+| `format` | Notes |
+|----------|-------|
+| `flat` | `key=value` per line; `#` comments and blank lines skipped; value trimmed; a line with no `=` or an empty key raises `ImportFormatException` with the line number. |
+| `csv` | Minimal RFC-4180 reader (quoted fields, `""` escapes, embedded newlines). The header row must name a `key` column and a `value` column (case-insensitive); a short row or unclosed quote is an error with the line number. |
+| `json` | `System.Text.Json`. Root must be an object. A nested object is flattened with `.` between segments; string values pass through, numbers / booleans are stringified, `null` → `""`, arrays are rejected. A parse error carries the `JsonException` line. |
+| `resx` | `System.Xml.Linq`. Takes `<data name="…"><value>…</value></data>`; skips entries with a `type=` or `mimetype=` attribute (typed / file-backed resources) and anything without a `<value>`. Malformed XML raises with the `XmlException` line. |
+
+A later duplicate key overrides an earlier one; the first occurrence fixes
+ordering. `ImportFormatException` derives from `ValidationException`, so the API
+maps it to `400` and the message is `Line <n>: <reason>` when a line is known.
+
+### Apply
+
+`ImportAsync` parses **first** (so a malformed body is `400` before any store
+round-trip), resolves the application (`404`) and the language — which must be in
+the application's `EnabledLanguageCodes` (`404`) — then, per entry:
+
+1. **Key create-if-missing.** An unknown `keyName` becomes a new `TranslationKey`
+   whose `Category` is the request `category` when supplied, otherwise
+   `CategorySuggestion.FromKeyName(keyName)` (the prefix rule, §2). `CreatedBy` is
+   the caller identity. A key name outside `[A-Za-z0-9_.-]+` is pushed to
+   `errors` (with the raw key) and skipped — the import continues.
+2. **String upsert.** The `TranslationString` for `(key, language)` is created or
+   edited to the entry value, then walked through the review state machine to the
+   requested `status` — `Draft` (default), `NeedsReview` or `Approved`.
+   `Published` is rejected (`400`). An entry whose value and state already match
+   is counted in `skipped`.
+3. **Audit.** A `Created` or `Edited` `AuditEntry` per changed string.
+
+Writes are staged in memory and flushed in one pass (new keys, new strings,
+changed strings, audit entries, then `SaveChanges`). **`dryRun: true` runs steps
+1–2 to build the plan and the counts and writes nothing.** If any imported string
+enters or leaves `Published`, the delivery cache for `(application, language)` is
+invalidated once at the end. The response echoes the counts, the per-row
+`errors`, and up to 200 distinct key names.
+
+### Per-row error model
+
+The import is **not** all-or-nothing: `ImportError { line?, key?, message }`
+rows accumulate for bad key names while valid entries still apply. A *parse*
+failure (bad `format` or malformed `content`) is the exception — it fails the
+whole request with `400` before anything is written.
+
+---
+
+## 13. Integration surface
+
+Machine callers — CI jobs, server-rendered sites, CDN origins — need two things
+the browser-oriented Entra flow does not give them well: a credential that does
+not require an interactive token exchange, and a push signal when a bundle
+changes.
+
+### API-key authentication
+
+- **`X-Api-Key` header.** A read-only scheme registered next to the JWT bearer
+  scheme and **composed** with it (a forward/selector scheme picks per request;
+  each `/api/*` policy still evaluates normally). Bearer is attempted first; a
+  request with no bearer but a valid `X-Api-Key` authenticates as a synthetic
+  principal holding the single role `ctms.reader` → satisfies `CanRead`, nothing
+  else. Every write policy still returns `403` for a key caller.
+- **`ApiKey` aggregate** (collection `apiKeys`): the key is stored **hashed**,
+  never raw; `POST /api/api-keys` returns the raw value **once**. `LastUsedAt` is
+  stamped on each authenticated request.
+- **Lifecycle routes** `POST` / `GET` / `DELETE /api/api-keys/{id}` are
+  `CanAdminProjects`. `DELETE` revokes immediately.
+- Active whenever `Auth:Enabled=true`; the `Auth:Enabled=false` all-roles bypass
+  supersedes it locally / in tests.
+
+### Publish webhooks
+
+- **`Webhook` aggregate** (collection `webhooks`): `Url` + a signing `secret`
+  returned once by `POST /api/webhooks`. Lifecycle routes are `CanAdminProjects`.
+- **Dispatch.** A publish (single-string `publish`, bulk review `publish`, or
+  `POST /api/translations/publish`) writes the changed `(application, language)`
+  pairs onto an in-process `Channel`; a hosted `BackgroundService` drains it and
+  `POST`s every registered webhook a JSON body
+  `{ event: "published", application, language, etag, publishedAt }`, where
+  `etag` is the same content hash the delivery route serves.
+- **Signature.** `X-CTMS-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>`.
+  A consumer recomputes the HMAC over the raw received bytes and compares in
+  constant time; `publishedAt` should be bounded to a few minutes against replay.
+  Worked example: [api.md → verifying the signature](api.md#publish-webhooks).
+- **Retry / give-up.** Up to `Webhooks:MaxAttempts` (default 3) tries, each with
+  a `Webhooks:TimeoutSeconds` (default 5) timeout; after the last failure the
+  event is **logged and dropped** — the queue is not retained indefinitely. A
+  missed webhook therefore still requires the consumer to fall back to a
+  conditional `GET` with `If-None-Match`.
+- **Isolation.** Dispatch is fire-and-forget off the background channel: a slow
+  or failing webhook **never** delays or fails the publish or its HTTP response.
+- **Off switch.** `Webhooks:Enabled=false` disables dispatch entirely (routes may
+  still register webhooks).

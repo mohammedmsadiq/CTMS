@@ -27,7 +27,10 @@ The store is **MongoDB** (`MongoDB.Driver`). Connection string key
 distributed-memory cache is used, so a local `dotnet run` needs no Redis. **There is no
 migration tool** — `MongoIndexInitializer` (an `IHostedService`) creates every index on
 startup; schema changes are additive and unknown-field-tolerant (`IgnoreExtraElements`). A
-one-off backfill command is written by hand when a rewrite is unavoidable.
+one-off backfill command is written by hand when a rewrite is unavoidable. Indexes of note:
+`languages.code` (unique), `projects.slug` (unique), `translationKeys.(projectId, keyName)`
+(unique), `translationStrings.(translationKeyId, languageCode)` (unique), `apiKeys.hash`
+(unique). The `webhooks` collection is tiny and unindexed.
 
 ## Architecture
 
@@ -86,6 +89,14 @@ CTMS.Api  ──►  CTMS.Application  ──►  CTMS.Domain
   `(entityType, entityId, timestamp)`) — append-only; `Action`, `Actor`, `Timestamp`,
   `FromState?`, `ToState?`, `Detail?`, and value diffs `OldValue?` / `NewValue?` (`NewValue`
   on `Created`; both on `Edited`; null on review transitions).
+- **`ApiKey`** (collection `apiKeys`, unique index `hash`) — a read-only machine credential.
+  `Name`, `Hash` (Base64 SHA-256 of the raw key — the raw key is **never** stored), `Prefix`
+  (first 8 chars of the raw key, for display), `CreatedBy`, `Active`, `LastUsedAt?`. Raw key
+  format `ctms_<40 URL-safe base64 chars>` from a CSPRNG (`ApiKeySecret`); shown once, at
+  creation.
+- **`Webhook`** (collection `webhooks`, no index) — a publish-notification endpoint. `Url`
+  (absolute http/https), `Secret` (HMAC signing key, shown once), `Active`, `Events`
+  (`IReadOnlyList<string>`; only `["published"]` fires today), `CreatedBy`.
 
 There are **no versioned bundles** — `TranslationBundle` and `TranslationString.Version` were
 removed. Published translations are assembled on demand (see below).
@@ -229,6 +240,25 @@ higher ceiling, `Limits:MaxImportBodyBytes` (default 5&nbsp;MB).
 → `AuditEntryDto[]`. `AuditEntryDto` carries `oldValue` / `newValue`, and its owning-application
 id field is **`applicationId`** (the internal `Project` / `ProjectId` names are unchanged).
 
+**API keys** (`CanAdminProjects`) — machine credentials for authenticated read-only clients.
+
+- `POST /api/api-keys` — body `{ name }` → `201`
+  `{ id, name, prefix, createdBy, active, createdAt, key }`. **`key` (the raw value) is
+  returned only here, once.**
+- `GET /api/api-keys` → `ApiKeyDto[]` (`{ id, name, prefix, createdBy, active, lastUsedAt?,
+  createdAt }` — no hash, no raw key).
+- `DELETE /api/api-keys/{id:guid}` → `204` / `404`. **Hard delete.**
+
+**Webhooks** (`CanAdminProjects`) — publish-notification registrations.
+
+- `POST /api/webhooks` — body `{ url, secret?, events? }` (`url` absolute http/https; a random
+  `secret` is generated when omitted; `events` defaults to `["published"]`) → `201`
+  `{ id, url, active, events, createdBy, createdAt, secret }`. **`secret` is returned only
+  here, once.** A non-http(s) `url` ⇒ `400`.
+- `GET /api/webhooks` → `WebhookDto[]` (`{ id, url, active, events, createdBy, createdAt }` —
+  no secret).
+- `DELETE /api/webhooks/{id:guid}` → `204` / `404`. Hard delete.
+
 **Health** — `GET /health` (liveness), `GET /health/ready` (Mongo `ping`, tag `ready`).
 
 ### Review workflow
@@ -247,6 +277,36 @@ id field is **`applicationId`** (the internal `Project` / `ProjectId` names are 
 Any other pair throws `InvalidReviewTransitionException` (409). Editing a stored string resets
 `ReviewState` to `NeedsReview` unless it is `Draft`.
 
+### Publish webhooks
+
+When translations are published — the bulk `POST /api/translations/publish`, a
+`POST /api/applications/{app}/review-bulk` with `action=publish`, or a per-string `review`
+`publish` — each publish path calls `IWebhookPublisher.Enqueue(applicationCode, languages)`
+(the ports live in `CTMS.Application/Webhooks`; enqueue happens *after* the cache invalidation).
+`ChannelWebhookPublisher` drops one `WebhookDelivery` per affected language onto a **bounded
+`Channel`** (drop-oldest when full) and returns immediately — a webhook never blocks or fails a
+publish. `WebhookDispatchService` (a `BackgroundService`, `CTMS.Api/Webhooks`) drains the
+channel: for each `(application, language)` it loads the active webhooks, asks
+`PublishedTranslationsService.GetPublishedAsync` for the **current delivery hash** (empty +
+logged if that lookup returns nothing / throws), builds the body once and POSTs it to every
+webhook subscribed to `published`.
+
+Delivery body (`application/json`, property order fixed so the signature is reproducible):
+
+```json
+{ "event": "published", "application": "<code>", "language": "<code>",
+  "etag": "<current delivery hash>", "publishedAt": "<iso8601>" }
+```
+
+Header `X-CTMS-Signature: sha256=<lowercase-hex HMAC-SHA256(secret, rawBody)>`
+(`WebhookSignature.Compute`). `WebhookSender` retries a non-2xx or a timeout up to
+`Webhooks:MaxAttempts` times (`Webhooks:RetryBackoff`, default 1s then 3s); after that it logs a
+warning with the webhook id + status and gives up.
+
+Config (`Webhooks` section): `Webhooks:Enabled` (default `true` — when `false`,
+`NoOpWebhookPublisher` is registered and nothing is enqueued or dispatched),
+`Webhooks:TimeoutSeconds` (default `5`), `Webhooks:MaxAttempts` (default `3`).
+
 ### Auth
 
 Five Entra app roles (`ctms.admin/manager/reviewer/translator/reader`) → six policies
@@ -254,6 +314,20 @@ Five Entra app roles (`ctms.admin/manager/reviewer/translator/reader`) → six p
 `CanAdminProjects`) in `src/CTMS.Api/Auth/AuthorizationPolicies.cs` (mirrored in
 `CTMS.AdminUI/Auth`). `updatedBy` / `reviewedBy` body fields are overridden with the token
 identity when a real bearer token is present (`TokenActor`).
+
+**API-key scheme (`X-Api-Key`).** When `Auth:Enabled=true`, `AuthenticationSetup` registers the
+`ApiKey` scheme (`ApiKeyAuthenticationHandler`) *alongside* JWT `Bearer`, and makes a
+`CtmsCombined` **policy scheme** the default: its `ForwardDefaultSelector` routes to `ApiKey`
+when the request carries an `X-Api-Key` header, otherwise to `Bearer`. Every CTMS policy is
+satisfied by **either** a valid bearer token **or** a valid `X-Api-Key`. The handler hashes the
+header value (Base64 SHA-256), looks it up via `IApiKeyRepository.FindByHashAsync`, and on an
+active match issues a principal holding the **single** role `ctms.reader` — an API key can only
+ever read; a write route it reaches answers `403`. Its `AuthenticationType` (`CtmsApiKey`) is
+distinct from JWT and the dev bypass, and it has no personal identity. No / unknown / inactive
+key ⇒ `AuthenticateResult.NoResult()` (never `Fail`) so a bearer token on the same request
+still gets its turn. `LastUsedAt` is stamped fire-and-forget (failure swallowed). When
+`Auth:Enabled=false` the dev-bypass all-roles principal still wins and **no** `ApiKey` scheme is
+added. The anonymous client-delivery routes are unaffected either way.
 
 ### Tests
 

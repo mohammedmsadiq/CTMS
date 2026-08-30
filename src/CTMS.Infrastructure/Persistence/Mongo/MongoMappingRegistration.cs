@@ -1,8 +1,10 @@
+using CTMS.Domain.ApiKeys;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Common;
 using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
+using CTMS.Domain.Webhooks;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
@@ -52,6 +54,8 @@ public static class MongoMappingRegistration
             RegisterEntity<Language>();
             RegisterEntity<TranslationKey>();
             RegisterEntity<TranslationString>();
+            RegisterEntity<ApiKey>();
+            RegisterEntity<Webhook>();
 
             // AuditEntry is append-only and does not derive from Entity (no CreatedAt/UpdatedAt);
             // it still auto-maps cleanly — Id maps to _id via the default id-member convention.

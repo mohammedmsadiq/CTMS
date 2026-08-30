@@ -2,6 +2,7 @@ using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
+using CTMS.Application.Webhooks;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
@@ -42,6 +43,7 @@ public sealed class PublishedTranslationsService
     private readonly IAuditRepository _audit;
     private readonly IPublishedTranslationsCache _cache;
     private readonly TranslationCacheInvalidator _invalidator;
+    private readonly IWebhookPublisher _webhooks;
     private readonly IUnitOfWork _unitOfWork;
 
     public PublishedTranslationsService(
@@ -52,6 +54,7 @@ public sealed class PublishedTranslationsService
         IAuditRepository audit,
         IPublishedTranslationsCache cache,
         TranslationCacheInvalidator invalidator,
+        IWebhookPublisher webhooks,
         IUnitOfWork unitOfWork)
     {
         _projects = projects;
@@ -61,6 +64,7 @@ public sealed class PublishedTranslationsService
         _audit = audit;
         _cache = cache;
         _invalidator = invalidator;
+        _webhooks = webhooks;
         _unitOfWork = unitOfWork;
     }
 
@@ -589,6 +593,11 @@ public sealed class PublishedTranslationsService
             : approved.Select(s => s.LanguageCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         await _invalidator.InvalidateAsync(app, affectedLanguages, cancellationToken);
+
+        if (approved.Count > 0)
+        {
+            _webhooks.Enqueue(app.Slug, affectedLanguages);
+        }
 
         return new PublishTranslationsResult(approved.Count);
     }

@@ -2,6 +2,7 @@ using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
+using CTMS.Application.Webhooks;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
@@ -22,6 +23,7 @@ public sealed class TranslationStringService
     private readonly IProjectRepository _projects;
     private readonly IAuditRepository _audit;
     private readonly TranslationCacheInvalidator _invalidator;
+    private readonly IWebhookPublisher _webhooks;
     private readonly IUnitOfWork _unitOfWork;
 
     public TranslationStringService(
@@ -31,6 +33,7 @@ public sealed class TranslationStringService
         IProjectRepository projects,
         IAuditRepository audit,
         TranslationCacheInvalidator invalidator,
+        IWebhookPublisher webhooks,
         IUnitOfWork unitOfWork)
     {
         _strings = strings;
@@ -39,6 +42,7 @@ public sealed class TranslationStringService
         _projects = projects;
         _audit = audit;
         _invalidator = invalidator;
+        _webhooks = webhooks;
         _unitOfWork = unitOfWork;
     }
 
@@ -257,6 +261,11 @@ public sealed class TranslationStringService
             await _invalidator.InvalidateAsync(project, [translationString.LanguageCode], cancellationToken);
         }
 
+        if (target == ReviewState.Published)
+        {
+            _webhooks.Enqueue(project.Slug, [translationString.LanguageCode]);
+        }
+
         return ToDto(translationString);
     }
 
@@ -359,6 +368,11 @@ public sealed class TranslationStringService
         if (affectedLanguages.Count > 0)
         {
             await _invalidator.InvalidateAsync(project, affectedLanguages.ToList(), cancellationToken);
+
+            if (target == ReviewState.Published)
+            {
+                _webhooks.Enqueue(project.Slug, affectedLanguages.ToList());
+            }
         }
 
         return new ReviewBulkResult(transitioned, skipped);

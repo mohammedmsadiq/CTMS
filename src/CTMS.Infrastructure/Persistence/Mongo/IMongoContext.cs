@@ -1,7 +1,9 @@
+using CTMS.Domain.ApiKeys;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
+using CTMS.Domain.Webhooks;
 using MongoDB.Driver;
 
 namespace CTMS.Infrastructure.Persistence.Mongo;
@@ -20,4 +22,8 @@ public interface IMongoContext
     IMongoCollection<TranslationString> TranslationStrings { get; }
 
     IMongoCollection<AuditEntry> AuditEntries { get; }
+
+    IMongoCollection<ApiKey> ApiKeys { get; }
+
+    IMongoCollection<Webhook> Webhooks { get; }
 }

@@ -4,12 +4,10 @@ How to build, run and test CTMS on your machine. Commands are the ones from
 [`CLAUDE.md`](../CLAUDE.md) - that file is the source of truth; this page adds
 the surrounding setup.
 
-> **Backend mid-rewrite.** Persistence has moved from PostgreSQL / EF Core to
-> MongoDB ([ADR&nbsp;0002](adr/0002-mongodb-as-primary-store.md)). `CLAUDE.md`
-> still documents the EF/`dotnet-ef` workflow in places; where this page and
-> `CLAUDE.md` disagree on persistence, this page reflects the current tree.
-> Some test classes had not been ported to the Mongo harness at the time of
-> writing - `dotnet test` may not be green until that lands.
+> **Concurrent branch.** API-key auth and publish webhooks are being added in
+> parallel (see [architecture.md §13](architecture.md#13-integration-surface));
+> until that merges, `CLAUDE.md` is the authority on their config keys and
+> routes. Everything else on this page reflects the current tree.
 
 ---
 
@@ -57,7 +55,7 @@ Compose services (`docker-compose.yml`, owned by the infra/devops workstream):
 | Service | Image | Host port | Purpose |
 |---------|-------|-----------|---------|
 | `mongo` | `mongo:7` | `27017` | Primary datastore. Named volume `mongo-data` persists between runs. |
-| `redis` | `redis:7-alpine` | `6379` | Distributed cache fronting `GET .../bundles/{localeCode}` (latest). Persistence disabled. |
+| `redis` | `redis:7-alpine` | `6379` | Distributed cache fronting `GET /api/translations/{application}/{language}` (assembled map + hash). Persistence disabled. |
 | `api` | built from `./Dockerfile` | `8080` | The API. Waits for `mongo` + `redis` healthchecks. Sets `Seed__Enabled=true`. |
 
 Local-only tweaks go in `docker-compose.override.yml` (git-ignored); see
@@ -89,18 +87,47 @@ dotnet run --project src/CTMS.Api
 
 With `docker compose up mongo -d` running, the default
 `appsettings.json` (`mongodb://localhost:27017`, database `ctms`) works with no
-extra configuration.
+extra configuration. `dotnet run` **always needs a reachable MongoDB**;
+`docker compose up` is the one-command path that brings up Mongo (+ Redis + the
+API) together.
+
+### Getting a first application ready
+
+You do not hand-create languages and keys row by row. The normal flow, all
+exposed by the Admin UI:
+
+1. **New-application wizard** — pick locales from the shipped BCP-47 catalogue
+   (`GET /api/languages/suggestions`), which the wizard turns into `Language`
+   rows in one call (`POST /api/languages/bulk`), then creates the application
+   with those languages enabled.
+2. **Import screen** — upload an existing `.resx` / JSON / CSV / flat file per
+   language (`POST /api/applications/{application}/import`). It creates any
+   missing keys (deriving each key's category from its name when you don't pick
+   one) and loads the strings at the review state you choose. Use **dry-run**
+   first to see the plan.
+
+Hand-creating keys (`POST .../keys`, with `category` now optional) and the dev
+seeder below are still there for quick experiments.
+
+### API keys and webhooks
+
+The machine-integration endpoints (`X-Api-Key` auth, `/api/api-keys`,
+`/api/webhooks`) are **only active when `Auth:Enabled=true`**. With the local
+`Auth:Enabled=false` bypass every request is already an all-roles principal, so
+there is nothing to configure — and nothing to test through those routes — until
+you run with real auth.
 
 ### How indexes are created
 
 `MongoIndexInitializer` - an `IHostedService` registered by `AddInfrastructure` -
-runs on every startup and calls `createIndexes` for all six collections
-(unique on `projects.slug`, `locales.(projectId,code)`,
-`translationKeys.(projectId,keyName)`,
-`translationStrings.(translationKeyId,localeId)`,
-`translationBundles.(projectId,localeCode,version)`; non-unique lookup indexes on
-`auditEntries`). `createIndexes` is idempotent, so a fresh database is ready
-after the first boot - there is no migration step and no `dotnet ef`.
+runs on every startup and calls `createIndexes` for every collection (unique on
+`languages.code`, `projects.slug`, `translationKeys.(projectId,keyName)`,
+`translationStrings.(translationKeyId,languageCode)`; non-unique lookup indexes
+on `translationKeys.(projectId,category)`, `translationStrings` by review state,
+and `auditEntries`). See
+[architecture.md §5](architecture.md#5-persistence--mongodb) for the full table.
+`createIndexes` is idempotent, so a fresh database is ready after the first boot
+- there is no migration step and no `dotnet ef`.
 
 ### Dev data seeder
 
@@ -118,9 +145,11 @@ Seed__Enabled=true dotnet run --project src/CTMS.Api
 ```
 
 (`docker compose` already sets `Seed__Enabled=true` on the `api` service.) It is
-idempotent - it does nothing if a project with slug `marketing-site` already
-exists - and seeds that project, `en` / `fr` / `ar` locales, and five English
-strings across `Draft` / `NeedsReview` / `Approved` states.
+idempotent - it does nothing if the shared application (slug `common`) already
+exists - and seeds the global language catalogue (`en-GB`, `fr-FR`, `fr-CA`,
+`de-DE`, `es-ES`, `ar-AE`, `it-IT` with fallback chains), a shared `common`
+application, and a sample `icoach` application with keys/strings across
+`Draft` / `NeedsReview` / `Approved` / `Published` states.
 
 ---
 

@@ -1,8 +1,10 @@
+using CTMS.Application.ApiKeys;
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
+using CTMS.Application.Webhooks;
 using CTMS.Infrastructure.Persistence.Caching;
 using CTMS.Infrastructure.Persistence.Health;
 using CTMS.Infrastructure.Persistence.Mongo;
@@ -57,6 +59,8 @@ public static class DependencyInjection
         services.AddScoped<ITranslationKeyRepository, TranslationKeyRepository>();
         services.AddScoped<ITranslationStringRepository, TranslationStringRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
+        services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
+        services.AddScoped<IWebhookRepository, WebhookRepository>();
 
         services.AddHealthChecks()
             .AddCheck<MongoHealthCheck>("database", tags: ["ready"]);
