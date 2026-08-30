@@ -1,4 +1,4 @@
-@page "/applications/{Code}/missing"
+@page "/projects/{Code}/missing"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject NavigationManager Nav
@@ -11,8 +11,8 @@
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">Missing</li>
     </ol>
 </nav>
@@ -152,7 +152,7 @@ else
             var authState = await AuthState.GetAuthenticationStateAsync();
             _canEdit = (await Authorization.AuthorizeAsync(authState.User, AuthorizationPolicies.CanEditStrings)).Succeeded;
 
-            var app = await Api.GetApplicationAsync(Code);
+            var app = await Api.GetProjectAsync(Code);
             _languages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
 
             var langs = await Api.GetLanguagesAsync(includeInactive: true);
@@ -222,7 +222,7 @@ else
     private bool IsRtl(string lang) => _rtl.Contains(lang);
 
     private string GridLink(string key) =>
-        $"applications/{Code}/grid?search={Uri.EscapeDataString(key)}";
+        $"projects/{Code}/grid?search={Uri.EscapeDataString(key)}";
 
     private void BeginFix(MissingRow row, string lang)
     {

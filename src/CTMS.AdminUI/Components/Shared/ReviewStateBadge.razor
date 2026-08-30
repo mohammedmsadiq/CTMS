@@ -2,28 +2,30 @@
 
 @code {
     /// <summary>
-    /// One of the <see cref="ReviewStates"/> names (<c>Draft</c> / <c>NeedsReview</c> /
-    /// <c>Approved</c> / <c>Published</c>). Callers must bind an expression — remember the
-    /// leading <c>@</c> (<c>State="@dto.ReviewState"</c>); a bare <c>State="dto.ReviewState"</c>
-    /// passes the literal text, not the value.
+    /// One of the <see cref="ReviewStates"/> names (<c>Draft</c> / <c>InReview</c> /
+    /// <c>Approved</c> / <c>Published</c> / <c>Archived</c>). Callers must bind an expression —
+    /// remember the leading <c>@</c> (<c>State="@dto.ReviewState"</c>); a bare
+    /// <c>State="dto.ReviewState"</c> passes the literal text, not the value.
     /// </summary>
     [Parameter, EditorRequired] public string State { get; set; } = "";
 
     private string Label => State switch
     {
         ReviewStates.Draft => "Draft",
-        ReviewStates.NeedsReview => "Needs review",
+        ReviewStates.InReview => "In review",
         ReviewStates.Approved => "Approved",
         ReviewStates.Published => "Published",
+        ReviewStates.Archived => "Archived",
         _ => string.IsNullOrWhiteSpace(State) ? "Unknown" : State,
     };
 
     private string CssClass => State switch
     {
         ReviewStates.Draft => "text-bg-secondary",
-        ReviewStates.NeedsReview => "text-bg-warning",
+        ReviewStates.InReview => "text-bg-warning",
         ReviewStates.Approved => "text-bg-success",
         ReviewStates.Published => "text-bg-primary",
+        ReviewStates.Archived => "text-bg-light border text-muted",
         _ => "text-bg-light",
     };
 }

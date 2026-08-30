@@ -1,19 +1,19 @@
-@page "/applications/new"
+@page "/projects/new"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanAdminProjects)]
 @inject CtmsApiClient Api
 @inject NavigationManager Nav
 @inject ToastService Toasts
 
-<PageTitle>New application — CTMS Admin</PageTitle>
+<PageTitle>New project — CTMS Admin</PageTitle>
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
         <li class="breadcrumb-item active" aria-current="page">New</li>
     </ol>
 </nav>
 
-<PageHeader Title="Create an application"
+<PageHeader Title="Create a project"
            Lead="A short guided flow: name it, pick its languages, then load or start entering translations." />
 
 <ol class="wizard-steps list-unstyled d-flex flex-wrap gap-2 mb-4">
@@ -48,14 +48,14 @@
                     <input id="w-desc" class="form-control" @bind="_description" />
                 </div>
                 <div class="col-12 form-check ms-1">
-                    <input class="form-check-input" type="checkbox" id="w-shared" @bind="_isShared" />
-                    <label class="form-check-label" for="w-shared">
-                        <strong>Shared</strong> — this application's published strings merge into every other application's delivery (use for common UI text).
+                    <input class="form-check-input" type="checkbox" id="w-common" @bind="_isCommon" />
+                    <label class="form-check-label" for="w-common">
+                        <strong>Common</strong> — this project's published strings merge into every other project's delivery (use for common UI text).
                     </label>
                 </div>
             </div>
             <div class="d-flex gap-2 mt-4">
-                <a class="btn btn-link" href="applications">Cancel</a>
+                <a class="btn btn-link" href="projects">Cancel</a>
                 <button class="btn btn-primary ms-auto" disabled="@(!Step1Valid)" @onclick="() => _step = 1">Next: languages</button>
             </div>
         </div>
@@ -160,7 +160,7 @@ else if (_step == 1)
                     {
                         <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
                     }
-                    Create application
+                    Create project
                 </button>
             </div>
         </div>
@@ -177,15 +177,15 @@ else
             </p>
             <div class="row g-3">
                 <div class="col-md-6">
-                    <a class="card h-100 text-decoration-none" href="@($"applications/{_createdCode}/import")">
+                    <a class="card h-100 text-decoration-none" href="@($"projects/{_createdCode}/import")">
                         <div class="card-body">
                             <h3 class="h6">Import existing translations</h3>
-                            <p class="text-muted small mb-0">Paste or upload a JSON / flat / CSV / RESX file for one language.</p>
+                            <p class="text-muted small mb-0">Paste or upload a JSON or flat key=value file for one language.</p>
                         </div>
                     </a>
                 </div>
                 <div class="col-md-6">
-                    <a class="card h-100 text-decoration-none" href="@($"applications/{_createdCode}/grid")">
+                    <a class="card h-100 text-decoration-none" href="@($"projects/{_createdCode}/grid")">
                         <div class="card-body">
                             <h3 class="h6">Start with the grid</h3>
                             <p class="text-muted small mb-0">Add keys and type values by hand.</p>
@@ -206,11 +206,11 @@ else
     private string _code = "";
     private bool _codeEdited;
     private string _description = "";
-    private bool _isShared;
+    private bool _isCommon;
 
     private bool _langLoading = true;
     private IReadOnlyList<LanguageDto> _catalogue = Array.Empty<LanguageDto>();
-    private IReadOnlyList<LanguageSuggestionDto> _suggestions = Array.Empty<LanguageSuggestionDto>();
+    private IReadOnlyList<LanguageSuggestion> _suggestions = Array.Empty<LanguageSuggestion>();
     private readonly List<PickedLang> _picked = new();
 
     private string _customCode = "";
@@ -239,14 +239,10 @@ else
             _catalogue = cat.Value!;
         }
 
-        // Show suggestions when the catalogue is empty or sparse.
+        // Show a small client-side starter list when the catalogue is empty or sparse.
         if (_catalogue.Count < 4)
         {
-            var sug = await Api.GetLanguageSuggestionsAsync();
-            if (sug.IsSuccess)
-            {
-                _suggestions = sug.Value!;
-            }
+            _suggestions = LanguageSuggestions.Common;
         }
 
         // Pre-tick the common set from whichever source has them.
@@ -336,15 +332,15 @@ else
         }
 
         var picked = _picked.Select(p => p.Code).ToArray();
-        var request = new CreateApplicationRequest(
+        var request = new CreateProjectRequest(
             _name.Trim(),
             picked[0],
             string.IsNullOrWhiteSpace(_code) ? null : _code.Trim(),
             string.IsNullOrWhiteSpace(_description) ? null : _description.Trim(),
-            _isShared,
+            _isCommon,
             picked);
 
-        var created = await Api.CreateApplicationAsync(request);
+        var created = await Api.CreateProjectAsync(request);
         _saving = false;
 
         if (created.IsSuccess)

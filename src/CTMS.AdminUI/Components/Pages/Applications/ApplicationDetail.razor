@@ -1,29 +1,29 @@
-@page "/applications/{Code}"
+@page "/projects/{Code}"
 @using System.ComponentModel.DataAnnotations
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 
-<PageTitle>@(_app?.Name ?? "Application") — CTMS Admin</PageTitle>
+<PageTitle>@(_project?.Name ?? "Project") — CTMS Admin</PageTitle>
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item active" aria-current="page">@(_app?.Name ?? Code)</li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item active" aria-current="page">@(_project?.Name ?? Code)</li>
     </ol>
 </nav>
 
 @if (_loading)
 {
-    <LoadingSpinner Message="Loading application…" />
+    <LoadingSpinner Message="Loading project…" />
 }
 else if (_loadError is not null)
 {
     <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
 }
-else if (_app is not null)
+else if (_project is not null)
 {
     <div class="d-flex justify-content-between align-items-center mb-2">
-        <h1 class="h3 mb-0">@_app.Name</h1>
+        <h1 class="h3 mb-0">@_project.Name</h1>
         <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent">
             <button class="btn btn-outline-secondary" @onclick="ToggleEdit">@(_editing ? "Close" : "Edit")</button>
         </AuthorizeView>
@@ -55,8 +55,8 @@ else if (_app is not null)
                             <InputText id="e-desc" class="form-control" @bind-Value="_form.Description" />
                         </div>
                         <div class="col-auto form-check ms-2 mt-2">
-                            <InputCheckbox id="e-shared" class="form-check-input" @bind-Value="_form.IsShared" />
-                            <label class="form-check-label" for="e-shared">Shared</label>
+                            <InputCheckbox id="e-common" class="form-check-input" @bind-Value="_form.IsCommon" />
+                            <label class="form-check-label" for="e-common">Common</label>
                         </div>
                         <div class="col-auto form-check ms-2 mt-2">
                             <InputCheckbox id="e-active" class="form-check-input" @bind-Value="_form.Active" />
@@ -80,30 +80,30 @@ else if (_app is not null)
 
     <dl class="row mt-3">
         <dt class="col-sm-3">Code</dt>
-        <dd class="col-sm-9"><code>@_app.Code</code></dd>
+        <dd class="col-sm-9"><code>@_project.Code</code></dd>
 
         <dt class="col-sm-3">Base language</dt>
-        <dd class="col-sm-9">@_app.BaseLanguageCode</dd>
+        <dd class="col-sm-9">@_project.BaseLanguageCode</dd>
 
         <dt class="col-sm-3">Kind</dt>
-        <dd class="col-sm-9">@(_app.IsShared ? "Shared" : "Standalone")</dd>
+        <dd class="col-sm-9">@(_project.IsCommon ? "Common" : "Standalone")</dd>
 
         <dt class="col-sm-3">Active</dt>
-        <dd class="col-sm-9">@(_app.Active ? "Yes" : "No")</dd>
+        <dd class="col-sm-9">@(_project.Active ? "Yes" : "No")</dd>
 
         <dt class="col-sm-3">Description</dt>
-        <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(_app.Description) ? "—" : _app.Description)</dd>
+        <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(_project.Description) ? "—" : _project.Description)</dd>
 
         <dt class="col-sm-3">Created</dt>
-        <dd class="col-sm-9">@_app.CreatedAt.ToLocalTime().ToString("f")</dd>
+        <dd class="col-sm-9">@_project.CreatedAt.ToLocalTime().ToString("f")</dd>
 
         <dt class="col-sm-3">Updated</dt>
-        <dd class="col-sm-9">@_app.UpdatedAt.ToLocalTime().ToString("f")</dd>
+        <dd class="col-sm-9">@_project.UpdatedAt.ToLocalTime().ToString("f")</dd>
     </dl>
 
     <div class="row g-3 mt-1">
         <div class="col-md-4">
-            <a class="card text-decoration-none h-100" href="@($"applications/{Code}/grid")">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/grid")">
                 <div class="card-body">
                     <h2 class="h5">Translation grid</h2>
                     <p class="text-muted mb-0 small">Add keys and edit every value across every enabled language.</p>
@@ -111,15 +111,15 @@ else if (_app is not null)
             </a>
         </div>
         <div class="col-md-4">
-            <a class="card text-decoration-none h-100" href="@($"applications/{Code}/import")">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/import")">
                 <div class="card-body">
                     <h2 class="h5">Import</h2>
-                    <p class="text-muted mb-0 small">Bulk-load JSON, flat, CSV or RESX for one language.</p>
+                    <p class="text-muted mb-0 small">Bulk-load JSON or flat key=value for one language.</p>
                 </div>
             </a>
         </div>
         <div class="col-md-4">
-            <a class="card text-decoration-none h-100" href="@($"applications/{Code}/review")">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/review")">
                 <div class="card-body">
                     <h2 class="h5">Review queue</h2>
                     <p class="text-muted mb-0 small">Approve or reject strings awaiting review.</p>
@@ -127,7 +127,7 @@ else if (_app is not null)
             </a>
         </div>
         <div class="col-md-4">
-            <a class="card text-decoration-none h-100" href="@($"applications/{Code}/missing")">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/missing")">
                 <div class="card-body">
                     <h2 class="h5">Missing translations</h2>
                     <p class="text-muted mb-0 small">Keys with a gap in one or more languages.</p>
@@ -135,7 +135,7 @@ else if (_app is not null)
             </a>
         </div>
         <div class="col-md-4">
-            <a class="card text-decoration-none h-100" href="@($"applications/{Code}/publish")">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/publish")">
                 <div class="card-body">
                     <h2 class="h5">Publish</h2>
                     <p class="text-muted mb-0 small">Promote approved strings and preview delivery.</p>
@@ -143,10 +143,10 @@ else if (_app is not null)
             </a>
         </div>
         <div class="col-md-4">
-            <a class="card text-decoration-none h-100" href="@($"applications/{Code}/history")">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/history")">
                 <div class="card-body">
                     <h2 class="h5">History</h2>
-                    <p class="text-muted mb-0 small">The append-only audit trail for this application.</p>
+                    <p class="text-muted mb-0 small">The append-only audit trail for this project.</p>
                 </div>
             </a>
         </div>
@@ -154,7 +154,7 @@ else if (_app is not null)
 
     <h2 class="h4 mt-5">Languages</h2>
     <p class="text-muted small">
-        Tick a language to add it to <code>@_app.Code</code>'s enabled set; untick to remove it.
+        Tick a language to add it to <code>@_project.Code</code>'s enabled set; untick to remove it.
         Only enabled languages get grid columns and delivery.
     </p>
     <ErrorAlert Error="_langError" />
@@ -168,8 +168,8 @@ else if (_app is not null)
         <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
             @foreach (var lang in _languages)
             {
-                var enabled = _app.EnabledLanguageCodes.Contains(lang.Code, StringComparer.OrdinalIgnoreCase);
-                var isBase = string.Equals(lang.Code, _app.BaseLanguageCode, StringComparison.OrdinalIgnoreCase);
+                var enabled = _project.EnabledLanguageCodes.Contains(lang.Code, StringComparer.OrdinalIgnoreCase);
+                var isBase = string.Equals(lang.Code, _project.BaseLanguageCode, StringComparison.OrdinalIgnoreCase);
                 <div class="col">
                     <div class="form-check">
                         <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
@@ -211,7 +211,7 @@ else if (_app is not null)
 
     private bool _loading = true;
     private ApiError? _loadError;
-    private ApplicationDto? _app;
+    private ProjectDto? _project;
 
     private IReadOnlyList<LanguageDto>? _languages;
     private ApiError? _langError;
@@ -244,10 +244,10 @@ else if (_app is not null)
     {
         _loading = true;
         _loadError = null;
-        var result = await Api.GetApplicationAsync(Code);
+        var result = await Api.GetProjectAsync(Code);
         if (result.IsSuccess)
         {
-            _app = result.Value;
+            _project = result.Value;
         }
         else
         {
@@ -260,38 +260,38 @@ else if (_app is not null)
     {
         _editing = !_editing;
         _saveError = null;
-        if (_editing && _app is not null)
+        if (_editing && _project is not null)
         {
-            _form.Name = _app.Name;
-            _form.Description = _app.Description ?? "";
-            _form.BaseLanguageCode = _app.BaseLanguageCode;
-            _form.IsShared = _app.IsShared;
-            _form.Active = _app.Active;
+            _form.Name = _project.Name;
+            _form.Description = _project.Description ?? "";
+            _form.BaseLanguageCode = _project.BaseLanguageCode;
+            _form.IsCommon = _project.IsCommon;
+            _form.Active = _project.Active;
         }
     }
 
     private async Task SaveAsync()
     {
-        if (_app is null)
+        if (_project is null)
         {
             return;
         }
 
         _saving = true;
         _saveError = null;
-        var request = new UpdateApplicationRequest(
+        var request = new UpdateProjectRequest(
             Name: _form.Name.Trim(),
             Description: _form.Description.Trim(),
-            IsShared: _form.IsShared,
+            IsCommon: _form.IsCommon,
             Active: _form.Active,
             BaseLanguageCode: _form.BaseLanguageCode);
 
-        var result = await Api.UpdateApplicationAsync(_app.Code, request);
+        var result = await Api.UpdateProjectAsync(_project.Code, request);
         _saving = false;
 
         if (result.IsSuccess)
         {
-            _app = result.Value;
+            _project = result.Value;
             _editing = false;
         }
         else
@@ -302,7 +302,7 @@ else if (_app is not null)
 
     private async Task ToggleLanguageAsync(string language, bool enable)
     {
-        if (_app is null)
+        if (_project is null)
         {
             return;
         }
@@ -310,13 +310,13 @@ else if (_app is not null)
         _langBusy = language;
         _langError = null;
         var result = enable
-            ? await Api.EnableApplicationLanguageAsync(_app.Code, language)
-            : await Api.DisableApplicationLanguageAsync(_app.Code, language);
+            ? await Api.EnableProjectLanguageAsync(_project.Code, language)
+            : await Api.DisableProjectLanguageAsync(_project.Code, language);
         _langBusy = null;
 
         if (result.IsSuccess)
         {
-            _app = result.Value;
+            _project = result.Value;
         }
         else
         {
@@ -333,7 +333,7 @@ else if (_app is not null)
         public string Description { get; set; } = "";
 
         public string BaseLanguageCode { get; set; } = "";
-        public bool IsShared { get; set; }
+        public bool IsCommon { get; set; }
         public bool Active { get; set; }
     }
 }

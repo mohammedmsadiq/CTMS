@@ -1,16 +1,16 @@
-@page "/applications"
+@page "/projects"
 @using System.ComponentModel.DataAnnotations
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject NavigationManager Nav
 
-<PageTitle>Applications — CTMS Admin</PageTitle>
+<PageTitle>Projects — CTMS Admin</PageTitle>
 
-<PageHeader Title="Applications"
-           Lead="Each application owns its own translation keys. Shared applications merge their published strings into every other application's delivery.">
+<PageHeader Title="Projects"
+           Lead="Each project owns its own translation keys. The Common project merges its published strings into every other project's delivery.">
     <Actions>
         <AuthorizeView Policy="@AuthorizationPolicies.CanAdminProjects">
-            <a class="btn btn-primary" href="applications/new">New application</a>
+            <a class="btn btn-primary" href="projects/new">New project</a>
             <button class="btn btn-outline-secondary" @onclick="ToggleCreate" disabled="@(_languages is null)">
                 @(_showCreate ? "Close quick form" : "Quick form")
             </button>
@@ -22,7 +22,7 @@
 {
     <div class="card mb-4">
         <div class="card-body">
-            <h2 class="h5">Create an application</h2>
+            <h2 class="h5">Create a project</h2>
             <EditForm Model="_form" OnValidSubmit="CreateAsync">
                 <DataAnnotationsValidator />
                 <div class="row g-3">
@@ -67,9 +67,9 @@
                         </div>
                     </div>
                     <div class="col-12 form-check ms-1">
-                        <InputCheckbox id="a-shared" class="form-check-input" @bind-Value="_form.IsShared" />
-                        <label class="form-check-label" for="a-shared">
-                            Shared — its published strings merge into every application
+                        <InputCheckbox id="a-common" class="form-check-input" @bind-Value="_form.IsCommon" />
+                        <label class="form-check-label" for="a-common">
+                            Common — its published strings merge into every project
                         </label>
                     </div>
                 </div>
@@ -90,22 +90,22 @@
 
 @if (_loading)
 {
-    <LoadingSpinner Message="Loading applications…" />
+    <LoadingSpinner Message="Loading projects…" />
 }
 else if (_loadError is not null)
 {
     <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
 }
-else if (_apps is { Count: 0 })
+else if (_projects is { Count: 0 })
 {
-    <EmptyState Title="No applications yet"
-                Hint="Create your first application — the guided flow sets up its languages and lets you import translations straight away.">
+    <EmptyState Title="No projects yet"
+                Hint="Create your first project — the guided flow sets up its languages and lets you import translations straight away.">
         <AuthorizeView Policy="@AuthorizationPolicies.CanAdminProjects">
-            <a class="btn btn-primary" href="applications/new">Create your first application</a>
+            <a class="btn btn-primary" href="projects/new">Create your first project</a>
         </AuthorizeView>
     </EmptyState>
 }
-else if (_apps is not null)
+else if (_projects is not null)
 {
     <div class="table-responsive">
         <table class="table table-hover align-middle">
@@ -119,23 +119,23 @@ else if (_apps is not null)
                 </tr>
             </thead>
             <tbody>
-                @foreach (var app in _apps)
+                @foreach (var project in _projects)
                 {
-                    <tr class="cursor-pointer" @onclick="() => Open(app.Code)">
-                        <td><a href="@($"applications/{app.Code}")"><code>@app.Code</code></a></td>
-                        <td>@app.Name</td>
+                    <tr class="cursor-pointer" @onclick="() => Open(project.Code)">
+                        <td><a href="@($"projects/{project.Code}")"><code>@project.Code</code></a></td>
+                        <td>@project.Name</td>
                         <td>
-                            @if (app.IsShared)
+                            @if (project.IsCommon)
                             {
-                                <span class="badge text-bg-info">shared</span>
+                                <span class="badge text-bg-info">Common</span>
                             }
                             else
                             {
                                 <span class="text-muted">—</span>
                             }
                         </td>
-                        <td>@(app.Active ? "Yes" : "No")</td>
-                        <td class="text-end">@app.EnabledLanguageCodes.Count</td>
+                        <td>@(project.Active ? "Yes" : "No")</td>
+                        <td class="text-end">@project.EnabledLanguageCodes.Count</td>
                     </tr>
                 }
             </tbody>
@@ -149,10 +149,10 @@ else if (_apps is not null)
     private bool _showCreate;
     private ApiError? _loadError;
     private ApiError? _createError;
-    private IReadOnlyList<ApplicationDto>? _apps;
+    private IReadOnlyList<ProjectDto>? _projects;
     private IReadOnlyList<LanguageDto>? _languages;
     private readonly HashSet<string> _enabled = new(StringComparer.OrdinalIgnoreCase);
-    private readonly CreateApplicationForm _form = new();
+    private readonly CreateProjectForm _form = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -168,10 +168,10 @@ else if (_apps is not null)
     {
         _loading = true;
         _loadError = null;
-        var result = await Api.GetApplicationsAsync(includeInactive: true);
+        var result = await Api.GetProjectsAsync(includeInactive: true);
         if (result.IsSuccess)
         {
-            _apps = result.Value;
+            _projects = result.Value;
         }
         else
         {
@@ -198,20 +198,20 @@ else if (_apps is not null)
     {
         _saving = true;
         _createError = null;
-        var request = new CreateApplicationRequest(
+        var request = new CreateProjectRequest(
             _form.Name.Trim(),
             _form.BaseLanguageCode.Trim(),
             string.IsNullOrWhiteSpace(_form.Code) ? null : _form.Code.Trim(),
             string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim(),
-            _form.IsShared,
+            _form.IsCommon,
             _enabled.Count == 0 ? null : _enabled.ToArray());
 
-        var result = await Api.CreateApplicationAsync(request);
+        var result = await Api.CreateProjectAsync(request);
         _saving = false;
 
         if (result.IsSuccess)
         {
-            Nav.NavigateTo($"applications/{result.Value!.Code}");
+            Nav.NavigateTo($"projects/{result.Value!.Code}");
         }
         else
         {
@@ -219,9 +219,9 @@ else if (_apps is not null)
         }
     }
 
-    private void Open(string code) => Nav.NavigateTo($"applications/{code}");
+    private void Open(string code) => Nav.NavigateTo($"projects/{code}");
 
-    private sealed class CreateApplicationForm
+    private sealed class CreateProjectForm
     {
         [Required, StringLength(200, MinimumLength = 1)]
         public string Name { get; set; } = "";
@@ -236,6 +236,6 @@ else if (_apps is not null)
         [StringLength(500)]
         public string? Description { get; set; }
 
-        public bool IsShared { get; set; }
+        public bool IsCommon { get; set; }
     }
 }

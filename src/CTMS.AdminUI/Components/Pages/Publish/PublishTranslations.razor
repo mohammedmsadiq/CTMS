@@ -1,4 +1,4 @@
-@page "/applications/{Code}/publish"
+@page "/projects/{Code}/publish"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject ToastService Toasts
@@ -7,8 +7,8 @@
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">Publish</li>
     </ol>
 </nav>
@@ -116,8 +116,8 @@
     <div class="card-body">
         <h2 class="h5">Delivery preview</h2>
         <p class="text-muted small">
-            The assemble-on-demand map a client would receive — this application's published
-            strings merged with every shared application's, fallbacks applied.
+            The assemble-on-demand map a client would receive — this project's published
+            strings merged with the Common project's, fallbacks applied.
         </p>
         <div class="row g-2 align-items-end mb-2">
             <div class="col-sm-4 col-md-3">
@@ -208,7 +208,7 @@
         _preview = null;
         _delivery = null;
         _publishError = null;
-        var app = await Api.GetApplicationAsync(Code);
+        var app = await Api.GetProjectAsync(Code);
         _languages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
     }
 

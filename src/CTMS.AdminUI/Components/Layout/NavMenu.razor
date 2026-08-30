@@ -13,8 +13,8 @@
 <div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
     <nav class="nav flex-column">
         <div class="nav-item px-3">
-            <NavLink class="nav-link" href="applications" Match="NavLinkMatch.Prefix">
-                <span class="bi bi-folder2-open-nav-menu" aria-hidden="true"></span> Applications
+            <NavLink class="nav-link" href="projects" Match="NavLinkMatch.Prefix">
+                <span class="bi bi-folder2-open-nav-menu" aria-hidden="true"></span> Projects
             </NavLink>
         </div>
         <div class="nav-item px-3">
@@ -28,43 +28,43 @@
             </NavLink>
         </div>
 
-        @if (_appCode is { } code)
+        @if (_projectCode is { } code)
         {
             <div class="nav-context px-3 pt-3 pb-1 text-uppercase small">
-                @(_appName ?? code)
+                @(_projectName ?? code)
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}")" Match="NavLinkMatch.All">
+                <NavLink class="nav-link" href="@($"projects/{code}")" Match="NavLinkMatch.All">
                     <span class="bi bi-info-circle-nav-menu" aria-hidden="true"></span> Overview
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}/grid")">
+                <NavLink class="nav-link" href="@($"projects/{code}/grid")">
                     <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Grid
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}/import")">
+                <NavLink class="nav-link" href="@($"projects/{code}/import")">
                     <span class="bi bi-box-nav-menu" aria-hidden="true"></span> Import
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}/review")">
+                <NavLink class="nav-link" href="@($"projects/{code}/review")">
                     <span class="bi bi-check2-square-nav-menu" aria-hidden="true"></span> Review
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}/missing")">
+                <NavLink class="nav-link" href="@($"projects/{code}/missing")">
                     <span class="bi bi-key-nav-menu" aria-hidden="true"></span> Missing
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}/publish")">
+                <NavLink class="nav-link" href="@($"projects/{code}/publish")">
                     <span class="bi bi-box-nav-menu" aria-hidden="true"></span> Publish
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"applications/{code}/history")">
+                <NavLink class="nav-link" href="@($"projects/{code}/history")">
                     <span class="bi bi-clock-history-nav-menu" aria-hidden="true"></span> History
                 </NavLink>
             </div>
@@ -73,8 +73,8 @@
 </div>
 
 @code {
-    private string? _appCode;
-    private string? _appName;
+    private string? _projectCode;
+    private string? _projectName;
 
     protected override void OnInitialized()
     {
@@ -87,31 +87,31 @@
 
     private async Task SyncToLocationAsync()
     {
-        var previous = _appCode;
-        _appCode = ExtractAppCode(Nav.ToBaseRelativePath(Nav.Uri));
+        var previous = _projectCode;
+        _projectCode = ExtractProjectCode(Nav.ToBaseRelativePath(Nav.Uri));
 
-        if (!string.Equals(_appCode, previous, StringComparison.Ordinal))
+        if (!string.Equals(_projectCode, previous, StringComparison.Ordinal))
         {
-            _appName = null;
+            _projectName = null;
             await InvokeAsync(StateHasChanged);
 
-            if (_appCode is { } code)
+            if (_projectCode is { } code)
             {
-                var result = await Api.GetApplicationAsync(code);
-                if (result.IsSuccess && string.Equals(_appCode, code, StringComparison.Ordinal))
+                var result = await Api.GetProjectAsync(code);
+                if (result.IsSuccess && string.Equals(_projectCode, code, StringComparison.Ordinal))
                 {
-                    _appName = result.Value!.Name;
+                    _projectName = result.Value!.Name;
                     await InvokeAsync(StateHasChanged);
                 }
             }
         }
     }
 
-    private static string? ExtractAppCode(string relativePath)
+    private static string? ExtractProjectCode(string relativePath)
     {
         var path = relativePath.Split('?', '#')[0];
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return segments.Length >= 2 && segments[0].Equals("applications", StringComparison.OrdinalIgnoreCase)
+        return segments.Length >= 2 && segments[0].Equals("projects", StringComparison.OrdinalIgnoreCase)
             ? Uri.UnescapeDataString(segments[1])
             : null;
     }

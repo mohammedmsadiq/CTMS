@@ -7,11 +7,11 @@ namespace CTMS.AdminUI.Auth;
 /// </summary>
 public static class AuthRoles
 {
-    public const string Admin = "ctms.admin";
-    public const string Manager = "ctms.manager";
-    public const string Reviewer = "ctms.reviewer";
-    public const string Translator = "ctms.translator";
-    public const string Reader = "ctms.reader";
+    public const string Admin = "TranslationAdministrator";
+    public const string Manager = "TranslationManager";
+    public const string Reviewer = "TranslationReviewer";
+    public const string Translator = "Translator";
+    public const string Reader = "TranslationReadOnly";
 
     public static readonly string[] All = [Admin, Manager, Reviewer, Translator, Reader];
 }

@@ -1,4 +1,4 @@
-@page "/applications/{Code}/history"
+@page "/projects/{Code}/history"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 
@@ -6,8 +6,8 @@
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">History</li>
     </ol>
 </nav>
@@ -112,7 +112,7 @@ else if (_page is not null)
         _loadError = null;
         StateHasChanged();
 
-        var result = await Api.GetApplicationHistoryAsync(Code, _skip, _take);
+        var result = await Api.GetProjectHistoryAsync(Code, _skip, _take);
         if (result.IsSuccess)
         {
             _page = result.Value;

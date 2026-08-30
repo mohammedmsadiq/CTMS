@@ -1,4 +1,4 @@
-@page "/applications/{Code}/import"
+@page "/projects/{Code}/import"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanManageContent)]
 @inject CtmsApiClient Api
 @inject ToastService Toasts
@@ -7,14 +7,14 @@
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">Import</li>
     </ol>
 </nav>
 
 <PageHeader Title="Import translations"
-           Lead="Bulk-load values for one language from a JSON, flat, CSV or RESX file. Preview first — nothing is written until you press Import." />
+           Lead="Bulk-load values for one language from a JSON or flat key=value file. Preview first — nothing is written until you press Import." />
 
 @if (_metaError is not null)
 {
@@ -48,7 +48,7 @@ else
                     <label class="form-label" for="imp-status">Initial status</label>
                     <select id="imp-status" class="form-select" @bind="_status">
                         <option value="@ReviewStates.Draft">Draft</option>
-                        <option value="@ReviewStates.NeedsReview">Needs review</option>
+                        <option value="@ReviewStates.InReview">In review</option>
                         <option value="@ReviewStates.Approved">Approved</option>
                     </select>
                 </div>
@@ -160,7 +160,7 @@ else
 
         @if (!_lastWasDryRun)
         {
-            <a class="btn btn-outline-secondary" href="@($"applications/{Code}/grid")">Open the grid</a>
+            <a class="btn btn-outline-secondary" href="@($"projects/{Code}/grid")">Open the grid</a>
         }
     }
 }
@@ -219,7 +219,7 @@ else
     private async Task LoadMetaAsync()
     {
         _metaError = null;
-        var app = await Api.GetApplicationAsync(Code);
+        var app = await Api.GetProjectAsync(Code);
         if (app.IsSuccess)
         {
             _languages = app.Value!.EnabledLanguageCodes;
@@ -275,8 +275,6 @@ else
         return ext switch
         {
             ".json" => "json",
-            ".csv" => "csv",
-            ".resx" => "resx",
             ".properties" or ".txt" or ".env" => "flat",
             _ => null,
         };

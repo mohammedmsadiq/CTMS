@@ -28,33 +28,33 @@ public sealed class CtmsApiClient(HttpClient http)
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    // ---- Applications -------------------------------------------------
+    // ---- Projects --------------------------------------------------
 
-    public Task<Result<IReadOnlyList<ApplicationDto>>> GetApplicationsAsync(
+    public Task<Result<IReadOnlyList<ProjectDto>>> GetProjectsAsync(
         bool includeInactive = false, CancellationToken ct = default) =>
-        GetAsync<IReadOnlyList<ApplicationDto>>(
-            "api/applications" + Query(("includeInactive", includeInactive ? "true" : null)), ct);
+        GetAsync<IReadOnlyList<ProjectDto>>(
+            "api/projects" + Query(("includeInactive", includeInactive ? "true" : null)), ct);
 
-    public Task<Result<ApplicationDto>> GetApplicationAsync(string code, CancellationToken ct = default) =>
-        GetAsync<ApplicationDto>($"api/applications/{Esc(code)}", ct);
+    public Task<Result<ProjectDto>> GetProjectAsync(string code, CancellationToken ct = default) =>
+        GetAsync<ProjectDto>($"api/projects/{Esc(code)}", ct);
 
-    public Task<Result<ApplicationDto>> CreateApplicationAsync(
-        CreateApplicationRequest request, CancellationToken ct = default) =>
-        SendAsync<ApplicationDto>(HttpMethod.Post, "api/applications", request, ct);
+    public Task<Result<ProjectDto>> CreateProjectAsync(
+        CreateProjectRequest request, CancellationToken ct = default) =>
+        SendAsync<ProjectDto>(HttpMethod.Post, "api/projects", request, ct);
 
-    public Task<Result<ApplicationDto>> UpdateApplicationAsync(
-        string code, UpdateApplicationRequest request, CancellationToken ct = default) =>
-        SendAsync<ApplicationDto>(HttpMethod.Patch, $"api/applications/{Esc(code)}", request, ct);
+    public Task<Result<ProjectDto>> UpdateProjectAsync(
+        string code, UpdateProjectRequest request, CancellationToken ct = default) =>
+        SendAsync<ProjectDto>(HttpMethod.Patch, $"api/projects/{Esc(code)}", request, ct);
 
-    public Task<Result<ApplicationDto>> EnableApplicationLanguageAsync(
+    public Task<Result<ProjectDto>> EnableProjectLanguageAsync(
         string code, string language, CancellationToken ct = default) =>
-        SendAsync<ApplicationDto>(
-            HttpMethod.Put, $"api/applications/{Esc(code)}/languages/{Esc(language)}", null, ct);
+        SendAsync<ProjectDto>(
+            HttpMethod.Put, $"api/projects/{Esc(code)}/languages/{Esc(language)}", null, ct);
 
-    public Task<Result<ApplicationDto>> DisableApplicationLanguageAsync(
+    public Task<Result<ProjectDto>> DisableProjectLanguageAsync(
         string code, string language, CancellationToken ct = default) =>
-        SendAsync<ApplicationDto>(
-            HttpMethod.Delete, $"api/applications/{Esc(code)}/languages/{Esc(language)}", null, ct);
+        SendAsync<ProjectDto>(
+            HttpMethod.Delete, $"api/projects/{Esc(code)}/languages/{Esc(language)}", null, ct);
 
     // ---- Languages (global) ----------------------------------------
 
@@ -74,11 +74,6 @@ public sealed class CtmsApiClient(HttpClient http)
         string code, UpdateLanguageRequest request, CancellationToken ct = default) =>
         SendAsync<LanguageDto>(HttpMethod.Patch, $"api/languages/{Esc(code)}", request, ct);
 
-    /// <summary>The static standard-language suggestion list (anonymous in the default config).</summary>
-    public Task<Result<IReadOnlyList<LanguageSuggestionDto>>> GetLanguageSuggestionsAsync(
-        CancellationToken ct = default) =>
-        GetAsync<IReadOnlyList<LanguageSuggestionDto>>("api/languages/suggestions", ct);
-
     /// <summary>Idempotently add a set of languages to the global catalogue.</summary>
     public Task<Result<BulkLanguagesResult>> BulkCreateLanguagesAsync(
         BulkLanguagesRequest request, CancellationToken ct = default) =>
@@ -87,29 +82,29 @@ public sealed class CtmsApiClient(HttpClient http)
     // ---- Translation keys ---------------------------------------
 
     public Task<Result<PagedResult<TranslationKeyDto>>> GetKeysAsync(
-        string application, string? category, int skip, int take, CancellationToken ct = default) =>
+        string project, string? category, int skip, int take, CancellationToken ct = default) =>
         GetAsync<PagedResult<TranslationKeyDto>>(
-            $"api/applications/{Esc(application)}/keys" + Query(
+            $"api/projects/{Esc(project)}/keys" + Query(
                 ("category", string.IsNullOrWhiteSpace(category) ? null : category),
                 ("skip", skip.ToString()),
                 ("take", take.ToString())),
             ct);
 
     public Task<Result<TranslationKeyDto>> GetKeyAsync(
-        string application, Guid keyId, CancellationToken ct = default) =>
-        GetAsync<TranslationKeyDto>($"api/applications/{Esc(application)}/keys/{keyId}", ct);
+        string project, Guid keyId, CancellationToken ct = default) =>
+        GetAsync<TranslationKeyDto>($"api/projects/{Esc(project)}/keys/{keyId}", ct);
 
     public Task<Result<TranslationKeyDto>> CreateKeyAsync(
-        string application, CreateTranslationKeyRequest request, CancellationToken ct = default) =>
-        SendAsync<TranslationKeyDto>(HttpMethod.Post, $"api/applications/{Esc(application)}/keys", request, ct);
+        string project, CreateTranslationKeyRequest request, CancellationToken ct = default) =>
+        SendAsync<TranslationKeyDto>(HttpMethod.Post, $"api/projects/{Esc(project)}/keys", request, ct);
 
     public Task<Result<TranslationKeyDto>> UpdateKeyAsync(
-        string application, Guid keyId, UpdateTranslationKeyRequest request, CancellationToken ct = default) =>
+        string project, Guid keyId, UpdateTranslationKeyRequest request, CancellationToken ct = default) =>
         SendAsync<TranslationKeyDto>(
-            HttpMethod.Patch, $"api/applications/{Esc(application)}/keys/{keyId}", request, ct);
+            HttpMethod.Patch, $"api/projects/{Esc(project)}/keys/{keyId}", request, ct);
 
-    public Task<Result> DeleteKeyAsync(string application, Guid keyId, CancellationToken ct = default) =>
-        SendAsync(HttpMethod.Delete, $"api/applications/{Esc(application)}/keys/{keyId}", ct);
+    public Task<Result> DeleteKeyAsync(string project, Guid keyId, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"api/projects/{Esc(project)}/keys/{keyId}", ct);
 
     // ---- Import --------------------------------------------------
 
@@ -118,49 +113,49 @@ public sealed class CtmsApiClient(HttpClient http)
     /// persisting. A <c>400</c> carries the offending line in <see cref="ApiError.Detail"/>.
     /// </summary>
     public Task<Result<ImportTranslationsResult>> ImportTranslationsAsync(
-        string application, ImportTranslationsRequest request, CancellationToken ct = default) =>
+        string project, ImportTranslationsRequest request, CancellationToken ct = default) =>
         SendAsync<ImportTranslationsResult>(
-            HttpMethod.Post, $"api/applications/{Esc(application)}/import", request, ct);
+            HttpMethod.Post, $"api/projects/{Esc(project)}/import", request, ct);
 
     /// <summary>Apply one review verb to every string matching a filter (language / category / keyIds).</summary>
     public Task<Result<ReviewBulkResult>> ReviewBulkAsync(
-        string application, ReviewBulkRequest request, CancellationToken ct = default) =>
+        string project, ReviewBulkRequest request, CancellationToken ct = default) =>
         SendAsync<ReviewBulkResult>(
-            HttpMethod.Post, $"api/applications/{Esc(application)}/review-bulk", request, ct);
+            HttpMethod.Post, $"api/projects/{Esc(project)}/review-bulk", request, ct);
 
     // ---- Translation strings -------------------------------
 
     public Task<Result<IReadOnlyList<TranslationStringDto>>> GetStringsForKeyAsync(
-        string application, Guid keyId, CancellationToken ct = default) =>
+        string project, Guid keyId, CancellationToken ct = default) =>
         GetAsync<IReadOnlyList<TranslationStringDto>>(
-            $"api/applications/{Esc(application)}/keys/{keyId}/strings", ct);
+            $"api/projects/{Esc(project)}/keys/{keyId}/strings", ct);
 
     public Task<Result<TranslationStringDto>> GetStringAsync(
-        string application, Guid keyId, string language, CancellationToken ct = default) =>
+        string project, Guid keyId, string language, CancellationToken ct = default) =>
         GetAsync<TranslationStringDto>(
-            $"api/applications/{Esc(application)}/keys/{keyId}/strings/{Esc(language)}", ct);
+            $"api/projects/{Esc(project)}/keys/{keyId}/strings/{Esc(language)}", ct);
 
     public Task<Result<TranslationStringDto>> UpsertStringAsync(
-        string application, Guid keyId, string language, UpsertTranslationStringRequest request,
+        string project, Guid keyId, string language, UpsertTranslationStringRequest request,
         CancellationToken ct = default) =>
         SendAsync<TranslationStringDto>(
             HttpMethod.Put,
-            $"api/applications/{Esc(application)}/keys/{keyId}/strings/{Esc(language)}",
+            $"api/projects/{Esc(project)}/keys/{keyId}/strings/{Esc(language)}",
             request,
             ct);
 
     public Task<Result<TranslationStringDto>> ReviewStringAsync(
-        string application, Guid keyId, string language, ReviewRequest request, CancellationToken ct = default) =>
+        string project, Guid keyId, string language, ReviewRequest request, CancellationToken ct = default) =>
         SendAsync<TranslationStringDto>(
             HttpMethod.Post,
-            $"api/applications/{Esc(application)}/keys/{keyId}/strings/{Esc(language)}/review",
+            $"api/projects/{Esc(project)}/keys/{keyId}/strings/{Esc(language)}/review",
             request,
             ct);
 
-    public Task<Result<PagedResult<TranslationStringDto>>> GetApplicationStringsAsync(
-        string application, string? reviewState, int skip, int take, CancellationToken ct = default) =>
+    public Task<Result<PagedResult<TranslationStringDto>>> GetProjectStringsAsync(
+        string project, string? reviewState, int skip, int take, CancellationToken ct = default) =>
         GetAsync<PagedResult<TranslationStringDto>>(
-            $"api/applications/{Esc(application)}/strings" + Query(
+            $"api/projects/{Esc(project)}/strings" + Query(
                 ("reviewState", string.IsNullOrWhiteSpace(reviewState) ? null : reviewState),
                 ("skip", skip.ToString()),
                 ("take", take.ToString())),
@@ -169,11 +164,11 @@ public sealed class CtmsApiClient(HttpClient http)
     // ---- Management ------------------------------------------------
 
     public Task<Result<PagedResult<TranslationRowDto>>> GetGridAsync(
-        string? application, string? category, string? language, string? search,
+        string? project, string? category, string? language, string? search,
         int skip, int take, string? status = null, CancellationToken ct = default) =>
         GetAsync<PagedResult<TranslationRowDto>>(
             "api/translations" + Query(
-                ("application", application),
+                ("project", project),
                 ("category", string.IsNullOrWhiteSpace(category) ? null : category),
                 ("language", string.IsNullOrWhiteSpace(language) ? null : language),
                 ("search", string.IsNullOrWhiteSpace(search) ? null : search),
@@ -183,71 +178,71 @@ public sealed class CtmsApiClient(HttpClient http)
             ct);
 
     public Task<Result<IReadOnlyList<string>>> GetCategoriesAsync(
-        string? application, CancellationToken ct = default) =>
-        GetAsync<IReadOnlyList<string>>("api/categories" + Query(("application", application)), ct);
+        string? project, CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<string>>("api/categories" + Query(("project", project)), ct);
 
     public Task<Result<DashboardResponse>> GetDashboardAsync(
-        string? application, CancellationToken ct = default) =>
-        GetAsync<DashboardResponse>("api/dashboard" + Query(("application", application)), ct);
+        string? project, CancellationToken ct = default) =>
+        GetAsync<DashboardResponse>("api/dashboard" + Query(("project", project)), ct);
 
     public Task<Result<PagedResult<MissingTranslationDto>>> GetMissingAsync(
-        string? application, string? language, int skip, int take, CancellationToken ct = default) =>
+        string? project, string? language, int skip, int take, CancellationToken ct = default) =>
         GetAsync<PagedResult<MissingTranslationDto>>(
             "api/translations/missing" + Query(
-                ("application", application),
+                ("project", project),
                 ("language", string.IsNullOrWhiteSpace(language) ? null : language),
                 ("skip", skip.ToString()),
                 ("take", take.ToString())),
             ct);
 
     public Task<Result<PublishTranslationsResult>> PublishAsync(
-        string application, string? language, CancellationToken ct = default) =>
+        string project, string? language, CancellationToken ct = default) =>
         SendAsync<PublishTranslationsResult>(
             HttpMethod.Post,
             "api/translations/publish",
-            new PublishTranslationsRequest(application, string.IsNullOrWhiteSpace(language) ? null : language),
+            new PublishTranslationsRequest(project, string.IsNullOrWhiteSpace(language) ? null : language),
             ct);
 
     /// <summary>
-    /// The pending delivery diff for a <c>(application, language)</c> pair — what a publish would
+    /// The pending delivery diff for a <c>(project, language)</c> pair — what a publish would
     /// add or change. <paramref name="language"/> is required by the server.
     /// </summary>
     public Task<Result<PublishPreviewResult>> GetPublishPreviewAsync(
-        string application, string language, CancellationToken ct = default) =>
+        string project, string language, CancellationToken ct = default) =>
         GetAsync<PublishPreviewResult>(
             "api/translations/publish/preview" + Query(
-                ("application", application),
+                ("project", project),
                 ("language", language)),
             ct);
 
     // ---- History / audit trail --------------------------------
 
-    public Task<Result<PagedResult<AuditEntryDto>>> GetApplicationHistoryAsync(
-        string application, int skip, int take, CancellationToken ct = default) =>
+    public Task<Result<PagedResult<AuditEntryDto>>> GetProjectHistoryAsync(
+        string project, int skip, int take, CancellationToken ct = default) =>
         GetAsync<PagedResult<AuditEntryDto>>(
-            $"api/applications/{Esc(application)}/history" + Query(
+            $"api/projects/{Esc(project)}/history" + Query(
                 ("skip", skip.ToString()), ("take", take.ToString())),
             ct);
 
     public Task<Result<IReadOnlyList<AuditEntryDto>>> GetStringHistoryAsync(
-        string application, Guid keyId, string language, CancellationToken ct = default) =>
+        string project, Guid keyId, string language, CancellationToken ct = default) =>
         GetAsync<IReadOnlyList<AuditEntryDto>>(
-            $"api/applications/{Esc(application)}/keys/{keyId}/strings/{Esc(language)}/history", ct);
+            $"api/projects/{Esc(project)}/keys/{keyId}/strings/{Esc(language)}/history", ct);
 
     // ---- Client delivery ------------------------------------------
 
     /// <summary>
-    /// Assemble-on-demand published map for one <c>(application, language)</c> pair, plus the
+    /// Assemble-on-demand published map for one <c>(project, language)</c> pair, plus the
     /// strong <c>ETag</c> validator from the response header. No <c>If-None-Match</c> is sent,
     /// so a live map always comes back <c>200</c>; <c>404</c> when the pair is unknown/inactive.
     /// </summary>
     public async Task<Result<PublishedDelivery>> GetPublishedTranslationsAsync(
-        string application, string language, CancellationToken ct = default)
+        string project, string language, CancellationToken ct = default)
     {
         try
         {
             using var response = await http.GetAsync(
-                $"api/translations/{Esc(application)}/{Esc(language)}", ct);
+                $"api/translations/{Esc(project)}/{Esc(language)}", ct);
             if (!response.IsSuccessStatusCode)
             {
                 return Result<PublishedDelivery>.Failure(await ReadErrorAsync(response, ct));

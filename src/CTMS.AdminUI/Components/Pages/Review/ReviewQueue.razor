@@ -1,4 +1,4 @@
-@page "/applications/{Code}/review"
+@page "/projects/{Code}/review"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 @inject CurrentUser CurrentUser
@@ -10,14 +10,14 @@
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">Review queue</li>
     </ol>
 </nav>
 
 <PageHeader Title="Review queue"
-           Lead="@($"Strings currently in Needs review for {Code}. Approve or reject one at a time, or a whole filtered set.")">
+           Lead="@($"Strings currently In review for {Code}. Approve, reject or archive one at a time, or a whole filtered set.")">
     <Actions>
         <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_loading">Refresh</button>
     </Actions>
@@ -51,6 +51,8 @@
                 @onclick="() => RunBulkAsync(ReviewActions.Approve)">Approve set</button>
         <button class="btn btn-sm btn-outline-danger" disabled="@(!BulkAllowed || _bulkBusy)"
                 @onclick="() => RunBulkAsync(ReviewActions.Reject)">Reject set</button>
+        <button class="btn btn-sm btn-outline-secondary" disabled="@(!BulkAllowed || _bulkBusy)"
+                @onclick="() => RunBulkAsync(ReviewActions.Archive)">Archive set</button>
         @if (!BulkAllowed)
         {
             <span class="small text-muted mb-1">Pick a language or a category to enable bulk actions.</span>
@@ -93,7 +95,7 @@ else if (_page is not null)
                 {
                     <tr>
                         <td>
-                            <a href="@($"applications/{Code}/grid?search={Uri.EscapeDataString(KeyName(s.TranslationKeyId))}")">
+                            <a href="@($"projects/{Code}/grid?search={Uri.EscapeDataString(KeyName(s.TranslationKeyId))}")">
                                 <code>@KeyName(s.TranslationKeyId)</code>
                             </a>
                         </td>
@@ -106,6 +108,8 @@ else if (_page is not null)
                                         @onclick="() => ReviewAsync(s, ReviewActions.Approve)">Approve</button>
                                 <button class="btn btn-sm btn-outline-danger" disabled="@(_busyId == s.Id)"
                                         @onclick="() => ReviewAsync(s, ReviewActions.Reject)">Reject</button>
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@(_busyId == s.Id)"
+                                        @onclick="() => ReviewAsync(s, ReviewActions.Archive)">Archive</button>
                             </AuthorizeView>
                         </td>
                     </tr>
@@ -159,8 +163,8 @@ else if (_page is not null)
             var authState = await AuthState.GetAuthenticationStateAsync();
             _canReview = (await Authorization.AuthorizeAsync(authState.User, AuthorizationPolicies.CanReview)).Succeeded;
 
-            var app = await Api.GetApplicationAsync(Code);
-            _queueLanguages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
+            var project = await Api.GetProjectAsync(Code);
+            _queueLanguages = project.IsSuccess ? project.Value!.EnabledLanguageCodes : Array.Empty<string>();
             var cats = await Api.GetCategoriesAsync(Code);
             _categories = cats.IsSuccess ? cats.Value! : Array.Empty<string>();
 
@@ -225,7 +229,7 @@ else if (_page is not null)
         _loading = true;
         _loadError = null;
         _rowError = null;
-        var result = await Api.GetApplicationStringsAsync(Code, ReviewStates.NeedsReview, _skip, _take);
+        var result = await Api.GetProjectStringsAsync(Code, ReviewStates.InReview, _skip, _take);
         if (result.IsSuccess)
         {
             _page = result.Value;

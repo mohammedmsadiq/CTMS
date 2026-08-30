@@ -5,15 +5,15 @@
 
 <PageTitle>Dashboard — CTMS Admin</PageTitle>
 
-<PageHeader Title="Dashboard" Lead="Translation coverage across your applications and languages.">
+<PageHeader Title="Dashboard" Lead="Translation coverage across your projects and languages.">
     <Actions>
         <div style="min-width: 16rem;">
-            <label class="form-label small mb-1" for="dash-app">Scope</label>
-            <select id="dash-app" class="form-select form-select-sm" value="@(Application ?? "")" @onchange="OnScopeChanged">
-                <option value="">All applications</option>
-                @foreach (var app in _apps)
+            <label class="form-label small mb-1" for="dash-project">Scope</label>
+            <select id="dash-project" class="form-select form-select-sm" value="@(Project ?? "")" @onchange="OnScopeChanged">
+                <option value="">All projects</option>
+                @foreach (var project in _projects)
                 {
-                    <option value="@app.Code">@app.Name (@app.Code)</option>
+                    <option value="@project.Code">@project.Name (@project.Code)</option>
                 }
             </select>
         </div>
@@ -33,8 +33,8 @@ else if (_data is not null)
     <div class="row row-cols-2 row-cols-md-4 g-3 mb-4">
         <div class="col">
             <div class="card h-100"><div class="card-body">
-                <div class="text-muted small text-uppercase">Applications</div>
-                <div class="fs-3 fw-semibold">@_data.ApplicationCount</div>
+                <div class="text-muted small text-uppercase">Projects</div>
+                <div class="fs-3 fw-semibold">@_data.ProjectCount</div>
             </div></div>
         </div>
         <div class="col">
@@ -99,19 +99,19 @@ else if (_data is not null)
 }
 
 @code {
-    [SupplyParameterFromQuery] public string? Application { get; set; }
+    [SupplyParameterFromQuery] public string? Project { get; set; }
 
     private bool _loading = true;
     private ApiError? _loadError;
     private DashboardResponse? _data;
-    private IReadOnlyList<ApplicationDto> _apps = Array.Empty<ApplicationDto>();
+    private IReadOnlyList<ProjectDto> _projects = Array.Empty<ProjectDto>();
 
     protected override async Task OnInitializedAsync()
     {
-        var apps = await Api.GetApplicationsAsync();
-        if (apps.IsSuccess)
+        var projects = await Api.GetProjectsAsync();
+        if (projects.IsSuccess)
         {
-            _apps = apps.Value!;
+            _projects = projects.Value!;
         }
     }
 
@@ -121,7 +121,7 @@ else if (_data is not null)
     {
         _loading = true;
         _loadError = null;
-        var result = await Api.GetDashboardAsync(string.IsNullOrWhiteSpace(Application) ? null : Application);
+        var result = await Api.GetDashboardAsync(string.IsNullOrWhiteSpace(Project) ? null : Project);
         if (result.IsSuccess)
         {
             _data = result.Value;
@@ -136,7 +136,7 @@ else if (_data is not null)
     private void OnScopeChanged(ChangeEventArgs e)
     {
         var code = e.Value?.ToString();
-        Nav.NavigateTo(string.IsNullOrEmpty(code) ? "dashboard" : $"dashboard?application={Uri.EscapeDataString(code)}");
+        Nav.NavigateTo(string.IsNullOrEmpty(code) ? "dashboard" : $"dashboard?project={Uri.EscapeDataString(code)}");
     }
 
     private static string BarClass(double percent) => percent switch

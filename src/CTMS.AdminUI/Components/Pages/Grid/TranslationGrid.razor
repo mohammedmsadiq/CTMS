@@ -1,4 +1,4 @@
-@page "/applications/{Code}/grid"
+@page "/projects/{Code}/grid"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @implements IDisposable
 @inject CtmsApiClient Api
@@ -11,8 +11,8 @@
 
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
-        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">Grid</li>
     </ol>
 </nav>
@@ -91,9 +91,10 @@
         <select id="grid-status" class="form-select form-select-sm" value="@_status" @onchange="OnStatusChanged">
             <option value="">All statuses</option>
             <option value="@ReviewStates.Draft">Draft</option>
-            <option value="@ReviewStates.NeedsReview">Needs review</option>
+            <option value="@ReviewStates.InReview">In review</option>
             <option value="@ReviewStates.Approved">Approved</option>
             <option value="@ReviewStates.Published">Published</option>
+            <option value="@ReviewStates.Archived">Archived</option>
         </select>
     </div>
     <div class="col-sm-4 col-md-4">
@@ -133,6 +134,8 @@
                 <option value="@ReviewActions.Reject">Reject</option>
                 <option value="@ReviewActions.Reopen">Reopen</option>
                 <option value="@ReviewActions.Publish">Publish</option>
+                <option value="@ReviewActions.Archive">Archive</option>
+                <option value="@ReviewActions.Unarchive">Unarchive</option>
             </select>
         </div>
         <div>
@@ -264,10 +267,10 @@ else
                                 {
                                     <div class="cell-view">
                                         <div class="cell-value">@cell!.Value</div>
-                                        <span class="badge text-bg-light border" title="Borrowed from a shared application">
-                                            from @cell.BorrowedFrom
+                                        <span class="badge text-bg-light border" title="Borrowed from the Common project">
+                                            Common
                                         </span>
-                                        <a class="small ms-1" href="@($"applications/{cell.BorrowedFrom}/grid?search={Uri.EscapeDataString(row.Key)}")">
+                                        <a class="small ms-1" href="@($"projects/{cell.BorrowedFrom}/grid?search={Uri.EscapeDataString(row.Key)}")">
                                             edit there
                                         </a>
                                     </div>
@@ -456,7 +459,7 @@ else
         _visibleLanguages.Clear();
         _rtl.Clear();
 
-        var appTask = Api.GetApplicationAsync(Code);
+        var appTask = Api.GetProjectAsync(Code);
         var langTask = Api.GetLanguagesAsync(includeInactive: true);
         var catTask = Api.GetCategoriesAsync(Code);
         await Task.WhenAll(appTask, langTask, catTask);
