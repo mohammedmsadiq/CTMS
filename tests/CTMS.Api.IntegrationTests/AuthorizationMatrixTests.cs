@@ -109,6 +109,24 @@ public sealed class AuthorizationMatrixTests(MongoFixture mongo) : IntegrationTe
     [Theory]
     [InlineData(null, HttpStatusCode.Unauthorized)]
     [InlineData(AuthRoles.Reader, HttpStatusCode.Forbidden)]
+    [InlineData(AuthRoles.Translator, HttpStatusCode.OK)]   // spec §46 — a translator may submit their own work
+    [InlineData(AuthRoles.Reviewer, HttpStatusCode.OK)]
+    [InlineData(AuthRoles.Admin, HttpStatusCode.OK)]
+    public async Task Post_review_submit_needs_CanEditStrings(string? role, HttpStatusCode expected)
+    {
+        var key = await _admin.CreateKeyAsync(_app.Code);
+        await _admin.UpsertStringAsync(_app.Code, key.Id, "en-GB", "v");
+
+        using var client = ClientFor(role);
+
+        using var response = await client.ReviewRaw(_app.Code, key.Id, "en-GB", "submit");
+
+        Assert.Equal(expected, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, HttpStatusCode.Unauthorized)]
+    [InlineData(AuthRoles.Reader, HttpStatusCode.Forbidden)]
     [InlineData(AuthRoles.Translator, HttpStatusCode.Forbidden)]
     [InlineData(AuthRoles.Reviewer, HttpStatusCode.Forbidden)]
     [InlineData(AuthRoles.Manager, HttpStatusCode.OK)]

@@ -1,71 +1,75 @@
 # CTMS architecture
 
-Centralised Translation Management System — a .NET 10 / C# service that stores
-translation strings for many **applications** and **languages**, runs them
-through a review/approval workflow, and serves **assembled-on-demand** published
-translations to client applications.
+Central Translation Management Service — a .NET 10 / C# service that is the
+**single source of truth for translations** across the organisation. It stores
+translation strings for many **projects** (applications) and **languages**, runs
+them through a review/approval workflow, and serves **assembled-on-demand**
+published translations.
 
-> **Implementation status.** The persistence layer runs on **MongoDB** — see
-> [ADR&nbsp;0002](adr/0002-mongodb-as-primary-store.md); production hardening is
-> [ADR&nbsp;0003](adr/0003-production-hardening.md); the model simplification and
-> the move from versioned bundles to assemble-on-demand delivery is
-> [ADR&nbsp;0004](adr/0004-assemble-on-demand-delivery-and-model-simplification.md).
->
-> On the current branch the following is **implemented**:
-> - the four-project solution plus `CTMS.Client` (SDK) and the `CTMS.AdminUI`
->   Blazor host;
-> - the global `Language` catalogue, the `Project` (application) /
->   `TranslationKey` / `TranslationString` aggregates and their CRUD + review
->   endpoints;
-> - assemble-on-demand delivery (`PublishedTranslationsService`) with the
->   content-hash `ETag` / `If-None-Match` / `304` conditional handling, the
->   Redis-backed read-through cache and its in-process fallback, and
->   invalidate-on-publish with shared-application fan-out;
-> - the management screens (`GET /api/translations` — with the `status` filter and
->   the `source` provenance tag on each cell —, `/api/categories`,
->   `/api/dashboard`, `/api/translations/missing`), bulk publish
->   (`POST /api/translations/publish`) and its diff preview
->   (`GET /api/translations/publish/preview`);
-> - the first-run helpers: optional `category` on key create with prefix
->   derivation, the static language catalogue (`GET /api/languages/suggestions`),
->   bulk language register (`POST /api/languages/bulk`), bulk file import
->   (`POST /api/applications/{application}/import`) and bulk review
->   (`POST /api/applications/{application}/review-bulk`) — see §12;
-> - the `AuditEntry` aggregate with value diffs and the read-only history
->   endpoints (its outward DTO field is now `applicationId`, not `projectId`);
-> - the full MongoDB persistence layer — `AddInfrastructure` wiring,
->   `CtmsMongoContext`, BSON mapping, all five repositories, the
->   `MongoHealthCheck` readiness probe, the `MongoIndexInitializer` and
->   `DataSeeder` hosted services;
-> - Entra ID JWT-bearer auth + role/policy authorization (§10), with the
->   `Auth:Enabled=false` dev bypass and the `Auth:PublicBundleReads`
->   anonymous-delivery path.
->
-> The **API-key** read-only auth scheme (`X-Api-Key`, `ApiKey` aggregate,
-> `/api/api-keys` routes) and **publish webhooks** (`Webhook` aggregate,
-> `/api/webhooks` routes, an async dispatch `BackgroundService`) are implemented —
-> see §13.
->
-> `TranslationBundle`, its repository and endpoints, and the
-> `TranslationString.Version` optimistic-concurrency token have been **removed**
-> (ADR 0004). EF Core, its configs, `CtmsDbContext`, the `InitialCreate`
-> migration and `.config/dotnet-tools.json` were removed with the MongoDB switch
-> (ADR 0002).
+The product specification is [`CLAUDE.md`](../CLAUDE.md). This document is the
+big picture; the rest of `docs/` drills into each area.
 
 ---
 
-## 1. Solution layout
+## 1. One engine, two consumption paths
 
-Four projects under `src/`, tests under `tests/`. Dependencies point inward —
-nothing in `Domain` references `Application`; nothing in `Application` references
-`Infrastructure` or ASP.NET.
+There is exactly **one** translation engine, `ITranslationService`
+(`CTMS.Application/Translations`). It has two entry points that produce a
+**byte-identical** result:
+
+```mermaid
+flowchart TD
+    Mongo[("MongoDB<br/>source of truth")]
+    App["Translation Application<br/>(CTMS.Application)<br/>Common · Project · Fallback · Publishing · Resolution"]
+    Redis[("Redis<br/>cache")]
+    REST["Translation REST API<br/>(CTMS.Api)"]
+
+    Mongo --> App
+    App <--> Redis
+    App --> REST
+
+    subgraph internal [Internal .NET microservices — in-process]
+        Course["CourseService"]
+        UserSvc["UserService"]
+    end
+    subgraph external [External consumers — HTTP]
+        MAUI["MAUI app"]
+        Web["Website / React / Angular"]
+        Other["External service"]
+    end
+
+    Course -->|"ITranslationService.GetTranslationsAsync"| App
+    UserSvc -->|"ITranslationService"| App
+    MAUI -->|"GET /api/translations/{project}/{language}"| REST
+    Web --> REST
+    Other --> REST
+```
+
+- **Internal .NET microservices** in the wider solution call
+  `services.AddTranslationServices(configuration)` (in `CTMS.Infrastructure`,
+  namespace `CTMS.Infrastructure`), inject `ITranslationService`, and call
+  `GetTranslationsAsync(project, language, ct)` directly — **no HTTP, no direct
+  Mongo/Redis access**. See [`internal-consumption.md`](internal-consumption.md).
+- **External applications** call
+  `GET /api/translations/{project}/{language}` with ETag / `If-None-Match` /
+  `304`. See [`external-consumption.md`](external-consumption.md).
+
+The REST endpoint (`TranslationEndpoints`) is a thin adapter: it calls the same
+`ITranslationService`, sets the `ETag` header, and answers `304`. It contains no
+translation resolution logic.
+
+`TranslationService` delegates to `PublishedTranslationsService`, so the
+resolve / common-merge / fallback / hash / cache read-through logic lives in
+exactly one place.
+
+## 2. Solution layout and dependency direction
 
 ```mermaid
 flowchart LR
-    Api["CTMS.Api<br/>(minimal API host, composition root)"]
-    App["CTMS.Application<br/>(use-case services, DTOs, ports)"]
-    Infra["CTMS.Infrastructure<br/>(Mongo driver, repositories, cache, index init, seeder)"]
-    Domain["CTMS.Domain<br/>(entities, invariants, review state machine)"]
+    Api["CTMS.Api<br/>minimal-API host, composition root"]
+    App["CTMS.Application<br/>use-case services, DTOs, ports"]
+    Infra["CTMS.Infrastructure<br/>Mongo driver, repositories, cache, index init, seeder"]
+    Domain["CTMS.Domain<br/>entities, invariants, review state machine"]
 
     Api --> App
     Api --> Infra
@@ -74,604 +78,220 @@ flowchart LR
     Infra --> Domain
 ```
 
-| Project | Responsibility | Key types |
-|---------|----------------|-----------|
-| **CTMS.Domain** | Entities and domain logic. No framework dependencies. Most entities derive from `Entity` (`Guid Id`, `CreatedAt`, `UpdatedAt` with `internal` setters); constructors and methods guard invariants; setters are private. `[InternalsVisibleTo("CTMS.Infrastructure")]` lets the persistence layer stamp timestamps. `AuditEntry` is the exception — it is append-only and carries only `Id` and `Timestamp`. | `Language`, `Project`, `TranslationKey`, `TranslationString`, `AuditEntry`; `ReviewState`, `AuditAction`, `InvalidReviewTransitionException` |
-| **CTMS.Application** | Use-case orchestration and the ports it needs. DTOs — never entities — cross the API boundary. `AddApplication()` registers the services. | `ProjectService`, `LanguageService`, `TranslationKeyService`, `TranslationStringService`, `PublishedTranslationsService`, `AuditService`, `TranslationCacheInvalidator`, `TranslationContentHash`; `IProjectRepository`, `ILanguageRepository`, `ITranslationKeyRepository`, `ITranslationStringRepository`, `IAuditRepository`, `IPublishedTranslationsCache`, `IUnitOfWork`; `PagedResult<T>`, `Slug`, the application exception types |
-| **CTMS.Infrastructure** | Data access. `AddInfrastructure(IConfiguration)` wires the Mongo client/context, the five repositories, `NoOpUnitOfWork`, the readiness health check, the translations cache, and two hosted startup services. | `CtmsMongoContext` / `IMongoContext`, `MongoMappingRegistration`, `MongoOptions`, `EntityStamps`, `NoOpUnitOfWork`, `MongoWriteExceptions`, `Persistence/Repositories/*Repository`, `Persistence/Caching/PublishedTranslationsCache`, `MongoHealthCheck`, `MongoIndexInitializer`, `DataSeeder` |
-| **CTMS.Api** | Minimal-API host. Composition root only — it references Infrastructure solely to call `AddInfrastructure`. Endpoints grouped per resource; known exceptions become RFC 7807 ProblemDetails via `ApplicationExceptionHandler`. | `Program.cs`, `Endpoints/*Endpoints.cs`, `Infrastructure/ApplicationExceptionHandler.cs`, `Infrastructure/ConditionalRequest.cs` |
+| Project | Responsibility |
+|---|---|
+| **CTMS.Domain** | Entities and rules. No framework dependencies. Most entities derive from `Entity` (`Guid Id`, `CreatedAt`, `UpdatedAt`, `internal` setters); constructors and methods guard invariants; setters are private. `AuditEntry` is the exception — append-only, only `Id` + `Timestamp`. |
+| **CTMS.Application** | Use-case orchestration and the ports it needs. **DTOs — never entities — cross the API boundary.** `AddApplication()` registers the services. No dependency on ASP.NET or HTTP: this is what lets internal microservices use it directly. |
+| **CTMS.Infrastructure** | Data access + cache. `AddInfrastructure(IConfiguration)` wires the Mongo client/context, the five repositories, `NoOpUnitOfWork`, `MongoHealthCheck`, the translations cache, and the `MongoIndexInitializer` / `DataSeeder` hosted services. `AddTranslationServices(IConfiguration)` = `AddApplication()` + `AddInfrastructure()` — the single entry point for an internal .NET consumer. |
+| **CTMS.Api** | Minimal-API host. Composition root only. Endpoints grouped per resource under `Endpoints/*`; known exceptions → RFC 7807 via `ApplicationExceptionHandler`; production hardening in `Infrastructure/*Setup.cs`; auth in `Auth/*`. |
+| **CTMS.AdminUI** | Blazor Web App (InteractiveServer). Entra ID OIDC sign-in; calls the management API with an on-behalf-of bearer token. Keeps a byte-identical copy of `AuthRoles` / `AuthorizationPolicies`. |
+| **CTMS.Client** | Optional NuGet client library for the REST API (`netstandard2.0` + `net10.0`). A client of the API; it does not replace the service. See [`maui-client.md`](maui-client.md). |
 
-Authentication and role-based authorization are wired (Microsoft Entra ID / JWT
-bearer) — see [§10 Security](#10-security). Every `/api/*` endpoint carries a
-named authorization policy except the client delivery reads, which are anonymous
-by default; `/health` and Swagger are always anonymous.
+`CTMS.Client` and `CTMS.AdminUI` reach `CTMS.Api` over **HTTP only** — never the
+Application or Infrastructure assemblies directly.
 
----
-
-## 2. Domain aggregates
+## 3. Domain aggregates
 
 ```mermaid
 erDiagram
     LANGUAGE ||--o{ LANGUAGE : "falls back to"
     PROJECT ||--o{ TRANSLATION_KEY : "owns"
-    TRANSLATION_KEY ||--o{ TRANSLATION_STRING : "value per language"
+    TRANSLATION_KEY ||--o{ TRANSLATION_STRING : "one value per language"
     PROJECT ||--o{ AUDIT_ENTRY : "activity log"
 ```
 
-| Aggregate | Fields | Invariants / uniqueness |
-|-----------|--------|-------------------------|
-| **Language** | `Id`, `Code` (BCP-47), `Name`, `FallbackCode?`, `IsRtl`, `Active`, `CreatedAt`, `UpdatedAt` | Global — not scoped to an application. `Code` unique across CTMS, trimmed, casing preserved; `Name` non-blank. `FallbackCode`, when set, is another language's `Code` and must not equal this language's own `Code`. Inactive languages are hidden from delivery and rejected by the assembler. |
-| **Project** (an *application*) | `Id`, `Name`, `Slug`, `Description?`, `BaseLanguageCode`, `IsShared`, `Active`, `EnabledLanguageCodes` (`IReadOnlyList<string>`), `CreatedAt`, `UpdatedAt` | `Slug` unique, lower-cased, trimmed — it is the application **code** on the client and management routes. `Name` and `BaseLanguageCode` non-blank. `IsShared` marks an application (e.g. `common`) whose published strings merge into every other application's delivered map. `EnabledLanguageCodes` is ordinal, de-duplicated; add/remove validate the language exists and is active. |
-| **TranslationKey** | `Id`, `ProjectId`, `KeyName` (dotted path), `Category`, `Description?`, `Active`, `CreatedBy`, `CreatedAt`, `UpdatedAt` | Unique `(ProjectId, KeyName)`. `KeyName` matches `[A-Za-z0-9_.-]+`. `Category` required, non-blank. Inactive keys are excluded from delivery and coverage. |
-| **TranslationString** | `Id`, `TranslationKeyId`, `LanguageCode` (string, BCP-47), `Value`, `ReviewState`, `UpdatedBy`, `CreatedAt`, `UpdatedAt` | Unique `(TranslationKeyId, LanguageCode)`. `ReviewState` moves only through `ChangeReviewState` (§3). **Last write wins — there is no version / concurrency token.** |
-| **AuditEntry** | `Id`, `ProjectId`, `EntityType` (e.g. `"TranslationString"`), `EntityId`, `Action` (`AuditAction`), `Actor`, `Timestamp` (UTC), `FromState?`, `ToState?` (`ReviewState`), `Detail?`, `OldValue?`, `NewValue?` | Write-once — never updated or deleted, so it has no `CreatedAt`/`UpdatedAt`; `Timestamp` is the single time field. `AuditAction` = `Created`, `Edited`, `Submitted`, `Approved`, `Rejected`, `Reopened`, `Published`. `NewValue` is set on `Created`; `OldValue` and `NewValue` on `Edited`; both null on review transitions. **The internal fields keep the `Project*` names; the outward `AuditEntryDto` exposes the owning-application id as `applicationId`.** |
+| Aggregate | Summary | Invariants |
+|---|---|---|
+| **Project** (a translatable *application*) | `Id`, `Name`, `Slug`, `Description?`, `BaseLanguageCode`, `IsCommon`, `Active`, `EnabledLanguageCodes` | `Slug` unique, lower-cased, trimmed — it is the **project code** on every route. `IsCommon` marks a project (e.g. `common`) whose published strings merge into every other project's delivered map. `EnabledLanguageCodes` is ordinal, de-duplicated; enable/disable validate the language exists and is active. |
+| **Language** | `Id`, `Code` (BCP-47), `Name`, `FallbackCode?`, `IsRtl`, `Active` | **Global** — one catalogue, not scoped to a project. `Code` unique. `FallbackCode`, when set, names another language and must not equal this one's `Code`. Inactive languages are hidden from delivery and rejected by the assembler. |
+| **TranslationKey** | `Id`, `ProjectId`, `KeyName` (dotted path), `Category`, `Description?`, `Active`, `CreatedBy` | Unique `(ProjectId, KeyName)`. `KeyName` matches `[A-Za-z0-9_.-]+`. `Category` non-blank (derived from the key-name prefix when the caller omits it — `CategorySuggestion`). Inactive keys are excluded from delivery and coverage. |
+| **TranslationString** | `Id`, `TranslationKeyId`, `LanguageCode`, `Value`, `ReviewState`, `UpdatedBy` | Unique `(TranslationKeyId, LanguageCode)`. `ReviewState` moves only through `ChangeReviewState` (§5). **Last write wins — no version / concurrency token.** |
+| **AuditEntry** | `Id`, `ProjectId`, `EntityType`, `EntityId`, `Action`, `Actor`, `Timestamp` (UTC), `FromState?`, `ToState?`, `Detail?`, `OldValue?`, `NewValue?` | Append-only — never updated or deleted, so no `CreatedAt`/`UpdatedAt`. `NewValue` on `Created`; both on `Edited`; both null on review transitions. Not exposed to consumers. |
 
 There is no `Locale` aggregate (replaced by the global `Language`) and no
 `TranslationBundle` aggregate (replaced by assemble-on-demand delivery, §4).
-
-### Integration aggregates
-
-| Aggregate | Fields | Collection / indexes |
-|-----------|--------|----------------------|
-| **ApiKey** | `Id`, `Name`, a **hash** of the key (the raw value is never stored), `CreatedAt`, `LastUsedAt?` | `apiKeys`; lookup by key hash. The raw key is returned once at creation. Authenticates a read-only principal (role `ctms.reader`). |
-| **Webhook** | `Id`, `Url`, a **secret** used for request signing (returned once at creation, then stored for HMAC use), `CreatedAt` | `webhooks`. Every registered webhook receives every publish event; there is no per-application scoping in the first cut. |
-
----
-
-## 3. Translation lifecycle
-
-Each `TranslationString` moves through this state machine. Legal transitions live
-on `TranslationString.ChangeReviewState(target, reviewedBy)`; every other
-`(from, to)` pair throws `InvalidReviewTransitionException` (HTTP 409). A
-successful transition sets `UpdatedBy` to the reviewer.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Draft: first upsert
-
-    Draft --> NeedsReview: submit
-    NeedsReview --> Approved: approve
-    NeedsReview --> Draft: reject
-    Approved --> NeedsReview: reopen
-    Approved --> Published: publish
-    Published --> NeedsReview: reopen
-
-    Draft --> Draft: edit
-    NeedsReview --> NeedsReview: edit
-    Approved --> NeedsReview: edit
-    Published --> NeedsReview: edit
-```
-
-Review actions accepted by `POST .../review` (`action` verb → target state, and
-the `AuditAction` recorded):
-
-| `action` | from → to | audit |
-|----------|-----------|-------|
-| `submit` | Draft → NeedsReview | `Submitted` |
-| `approve` | NeedsReview → Approved | `Approved` |
-| `reject` | NeedsReview → Draft | `Rejected` |
-| `reopen` | Approved → NeedsReview, **or** Published → NeedsReview | `Reopened` |
-| `publish` | Approved → Published | `Published` |
-
-**Edit semantics.** `TranslationString.Edit(value, editedBy)` (invoked by the
-string upsert when the row already exists): editing a `Draft` leaves it `Draft`;
-editing any non-draft (`NeedsReview`, `Approved`, `Published`) resets it to
-`NeedsReview`, so approved or published text cannot be changed without
-re-review. **There is no optimistic concurrency** — the upsert is last-write-wins:
-a write with an unchanged value is a no-op, a write with a changed value
-overwrites whatever is stored and records an `Edited` audit entry with the
-old/new value diff. A concurrent edit by another actor is overwritten silently;
-the mitigations are the review workflow (a non-`Draft` edit drops back to
-`NeedsReview`) and the audit trail.
-
-**Bulk publish.** `POST /api/translations/publish` promotes **every `Approved`
-string** for an application (optionally one language) to `Published` through the
-same `Approved → Published` transition, writes a `Published` audit entry per
-string, and invalidates the delivery cache (§4, §6).
-
-**Audit.** Every state-changing operation on a `TranslationString` writes an
-`AuditEntry` inline within the same use case, before
-`IUnitOfWork.SaveChangesAsync` (`Created` on first upsert, `Edited` on edit, and
-the verb-specific action on a review transition). `AuditService` is read-only.
-
----
+There are **no** `ApiKey` or `Webhook` aggregates.
 
 ## 4. Assemble-on-demand delivery
 
-`PublishedTranslationsService` (`CTMS.Application/Translations`) assembles the
-delivered map on demand — there are no stored bundles and no version numbers.
-`TranslationEndpoints` (`CTMS.Api/Endpoints`) exposes it; `PublishedTranslationsCache`
-fronts it. Full route reference:
-[api.md → Client delivery](api.md#client-delivery).
+`PublishedTranslationsService.GetPublishedAsync(project, language)` — there are
+**no stored bundles and no version numbers**:
 
-### `GET /api/translations/{application}/{language}`
-
-`GetPublishedAsync(applicationCode, languageCode)`:
-
-1. **Resolve.** Look up the application by slug (`404` when unknown or
-   `Active == false`) and the language by code (`404` when unknown or
-   `Active == false`, or when the code is not in the application's
+1. **Resolve.** Look up the project by slug (404 unknown / inactive) and the
+   language by code (404 unknown / inactive, or not in the project's
    `EnabledLanguageCodes`).
-2. **Cache check.** If `translations:{app}:{language}` is present, return the
-   cached map + hash without assembling (§6).
-3. **Gather published strings.** Read the `Published` `TranslationString`s for
-   this application's active keys **plus every `IsShared` application's** active
-   keys.
-4. **Merge.** Walk this application's keys first, then the shared applications'
-   keys; a shared key whose name already resolved from the app is skipped — the
-   **application-specific value wins** on a key-name collision.
-5. **Fallback walk.** For each key, look for a `Published` value in
-   `{language}`; if there is none, follow `Language.FallbackCode`
-   (`fr-CA` → `fr-FR` → `en-GB`), guarded against cycles by a visited-set, and
-   take the first `Published` value found. A key with no `Published` value
-   anywhere in the chain is **omitted**.
-6. **Order + hash.** Order the map by key (ordinal) and compute the content hash
-   (below). Store `{ map, hash }` in the cache and return it.
+2. **Cache check.** If `translations:{project}:{language}` is present, return the
+   cached map + hash without assembling.
+3. **Gather published strings.** `TranslationString`s with
+   `ReviewState == Published` for this project's active keys **plus every
+   `IsCommon` project's** active keys. `Archived` is never included.
+4. **Merge.** Walk this project's keys first, then the common projects' keys; a
+   common key whose name already resolved from the project is skipped — the
+   **project-specific value wins** on a key-name collision (spec §22).
+5. **Fallback walk.** For a key with no `Published` value in `{language}`, follow
+   `Language.FallbackCode` (`fr-CA` → `fr-FR` → `en-GB`), cycle-guarded, and take
+   the first `Published` value. A key with no published value anywhere is
+   **omitted**.
+6. **Order + hash.** Order by key (ordinal); compute the content hash
+   (`TranslationContentHash`, [`etag.md`](etag.md)). Store `{ map, hash }` in the
+   cache; return it.
 
 ```mermaid
 sequenceDiagram
-    participant C as Client / SDK / CDN
-    participant API as CTMS.Api
-    participant Cache as Redis (or in-memory)
+    participant C as Consumer (in-process or HTTP)
     participant Svc as PublishedTranslationsService
+    participant Cache as Redis (or in-memory)
     participant Mongo as MongoDB
 
-    C->>API: GET /api/translations/icoach/fr-CA<br/>If-None-Match: "abc123"
-    API->>Svc: GetPublishedAsync("icoach", "fr-CA")
-    Svc->>Mongo: resolve application + language
+    C->>Svc: GetPublishedAsync("icoach", "fr-CA")
+    Svc->>Mongo: resolve project + language
     Svc->>Cache: GET translations:icoach:fr-ca
     alt cache hit
         Cache-->>Svc: { map, hash }
     else cache miss
-        Svc->>Mongo: published strings for app keys + shared app keys
-        Svc->>Svc: merge (app wins) + fallback walk fr-CA→fr-FR→en-GB + hash
+        Svc->>Mongo: published strings for project keys + common project keys
+        Svc->>Svc: merge (project wins) + fallback walk + content hash
         Svc->>Cache: SET translations:icoach:fr-ca (TTL 60m)
     end
-    Svc-->>API: { application, language, translations, hash }
-    API->>API: ETag: "<hash>", Cache-Control: no-cache
-    alt If-None-Match matches hash
-        API-->>C: 304 Not Modified (ETag set, no body)
-    else
-        API-->>C: 200 { application, language, translations }
-    end
+    Svc-->>C: { project, language, translations, hash }
 ```
 
-### The content hash / ETag
+**Publishing** is a single action:
+`POST /api/translations/publish` (`{ project, language? }`) promotes every
+`Approved` string for the project (optionally one language) to `Published`,
+writes a `Published` audit entry per string, and invalidates the delivery cache
+([`caching.md`](caching.md)). The per-string `publish` review action does the
+same for one string.
 
-`TranslationContentHash.Compute(map)`:
+## 5. Translation lifecycle
 
-- Order the entries by key, ordinal.
-- For each, append `key`, `"\n"`, `value`, `"\n"` to a buffer.
-- Hash = lowercase-hex SHA-256 of that buffer's UTF-8 bytes.
-
-The endpoint sets `ETag: "<hash>"` (the raw hash wrapped in double quotes — a
-strong validator) and `Cache-Control: no-cache` on every `200` and every `304`.
-`ConditionalRequest.IsNotModified` evaluates `If-None-Match` (quoted, `W/`-weak,
-comma-lists, repeated headers and `*` all accepted) and the endpoint answers
-`304 Not Modified` with no body when it matches. Two assemblies with identical
-content produce byte-identical hashes; any value change changes the hash. This is
-the same algorithm the old versioned bundle used for its ETag.
-
-### Access
-
-`GET /api/translations/{application}/{language}`, `GET /api/languages`,
-`GET /api/languages/suggestions` and `GET /api/applications` are **anonymous by
-default** — they are the SDK / CDN delivery and wizard-setup path. Setting
-`Auth:PublicBundleReads=false` makes them require `CanRead` instead (§10). The
-management routes under `/api/translations` (grid, missing, publish, publish
-preview) and `/api/categories`, `/api/dashboard` always require a token.
-
-### The management grid vs. client delivery
-
-`GET /api/translations` (the admin grid) assembles from the same data but is a
-different projection:
-
-- **`status` filter** — one of the four `ReviewState` names; keeps only rows with
-  at least one cell in that state while still returning every cell of a kept row,
-  so the grid stays coherent. An invalid value is `400`. Client delivery has no
-  such filter — it only ever sees `Published`.
-- **`source` provenance** — each grid cell is tagged `"app"` or `"shared:<code>"`
-  so an editor can see which values are inherited from a shared application (an
-  app-owned key still wins a name collision). The client delivery payload is a
-  bare `key → value` map and never carries `source`.
-
----
-
-## 5. Persistence — MongoDB
-
-Driver: `MongoDB.Driver`. `AddInfrastructure(IConfiguration)` registers a
-singleton `IMongoClient` from `ConnectionStrings:CtmsDatabase`, a singleton
-`IMongoContext` → `CtmsMongoContext` bound to the `Mongo:Database` database
-(default `ctms`), the five scoped repositories, `NoOpUnitOfWork` as a singleton
-`IUnitOfWork`, the `MongoHealthCheck` (name `database`, tag `ready`), the
-translations cache (§6), and two `IHostedService`s — `MongoIndexInitializer` and
-`DataSeeder`. `MongoMappingRegistration.Register()` is called during wiring.
-
-### Collections
-
-Names are constants on `CtmsMongoContext`. All indexes below are created by
-`MongoIndexInitializer` on startup:
-
-| Constant | Collection | Document | Indexes |
-|----------|------------|----------|---------|
-| `LanguagesCollection` | `languages` | Language | `{ code: 1 }` unique |
-| `ProjectsCollection` | `projects` | Project | `{ slug: 1 }` unique |
-| `TranslationKeysCollection` | `translationKeys` | TranslationKey | `{ projectId: 1, keyName: 1 }` unique; `{ projectId: 1, category: 1 }` |
-| `TranslationStringsCollection` | `translationStrings` | TranslationString | `{ translationKeyId: 1, languageCode: 1 }` unique; `{ translationKeyId: 1, reviewState: 1, updatedAt: -1 }` |
-| `AuditEntriesCollection` | `auditEntries` | AuditEntry | `{ projectId: 1, timestamp: 1 }`, `{ entityType: 1, entityId: 1, timestamp: 1 }` (both non-unique) |
-
-The unique indexes carry the constraints relational foreign keys and unique
-indexes used to enforce. Referential integrity the database no longer guarantees
-("a key's application exists"; cascade delete of a key's strings; a
-`LanguageCode` that names a real, enabled language) is enforced in the
-application services and by explicit multi-collection cleanup in the
-repositories.
-
-### BSON mapping (`MongoMappingRegistration.Register()`, idempotent)
-
-- GUIDs stored as the standard UUID BSON subtype everywhere, including `_id`.
-- Conventions applied to every `CTMS.*` type: camelCase element names,
-  `IgnoreExtraElements` (tolerate unknown fields — additive schema evolution),
-  enums stored as strings (`ReviewState`, `AuditAction`).
-
-### Index creation
-
-`MongoIndexInitializer` (an `IHostedService`) calls `createIndexes` for every
-collection on startup via `EnsureIndexesAsync(IMongoContext)`. It is idempotent —
-MongoDB ignores an already-present index with the same key and options — so it
-runs unconditionally in every environment; a fresh database is ready after the
-first boot. **There is no migration tool.** Shape changes are handled by
-additive, unknown-field-tolerant mapping and one-off backfill commands when a
-rewrite is unavoidable.
-
-### No optimistic concurrency
-
-`TranslationString` has no version field. The string repository's `UpdateAsync`
-is a plain by-`_id` replace — last write wins. There is no `expectedVersion`
-input, no `version` output, and no `409` concurrency response anywhere in the
-API. (ADR 0004 removed the `long` `Version` token that ADR 0002 had introduced in
-place of PostgreSQL's `xmin`.)
-
-### Unit of work
-
-`NoOpUnitOfWork.SaveChangesAsync` returns 0 and does nothing: every repository
-call is a single-document atomic write that is already durable when it returns.
-The services still call it so their use cases read as a unit of work, and so a
-future multi-document transaction has one seam to hook. A publish that updates
-many strings and writes many audit entries therefore spans documents
-non-transactionally — it relies on operation ordering and idempotency.
-
-### Timestamps
-
-`EntityStamps.StampCreated` / `StampUpdated` (extension methods on `Entity`) set
-`CreatedAt` / `UpdatedAt` in the repositories just before a write.
-
-### Duplicate keys
-
-`MongoWriteExceptions.IsDuplicateKey` recognises E11000; repositories translate
-it into `ConflictException` / `SlugAlreadyInUseException`.
-
----
-
-## 6. Translations cache
-
-The assembled delivery map is read-heavy and cheap to invalidate — a good cache
-fit. `AddInfrastructure` registers an `IDistributedCache`:
-**StackExchange.Redis** (`AddStackExchangeRedisCache`) when
-`ConnectionStrings:Redis` is set (format `host:port[,options]`), otherwise an
-in-process distributed-memory cache so a local `dotnet run` needs no Redis.
-`CacheModeLogger` logs which backend is active once at startup.
-`PublishedTranslationsCache` (implements `IPublishedTranslationsCache`) wraps it.
-
-- Only `GET /api/translations/{application}/{language}` is cached. It checks the
-  cache before MongoDB; a miss assembles the map and populates the cache.
-- Key: **`translations:{applicationCode}:{languageCode}`**, both trimmed and
-  lower-cased (`PublishedTranslationsCache.KeyFor`).
-- The cached entry is the serialized `{ translations, hash }` (`CachedTranslations`),
-  so an `If-None-Match` / `304` check needs no assembly and no database
-  round-trip on a hit.
-- TTL is `Cache:TranslationsTtlMinutes` (default 60; `<= 0` falls back to 60).
-- **Invalidation** is driven by `TranslationCacheInvalidator`:
-  - a per-string review transition that **enters or leaves `Published`**;
-  - an **edit that knocks a `Published` string** back to `NeedsReview`;
-  - a bulk `POST /api/translations/publish`.
-  Each invalidates `translations:{app}:{lang}` for the affected language(s).
-  **Invalidating a shared application (`IsShared == true`) fans out** — it
-  removes the entry for **every** application (`ListAsync(includeInactive: true)`)
-  × each affected language, because a shared application contributes to every
-  application's map.
-- Every cache call is wrapped: a read/write/invalidate failure is logged and
-  treated as a miss, so delivery degrades to on-demand assembly. The cache is an
-  optimisation, not a source of truth — and there is no Redis readiness probe for
-  that reason (§7).
-
----
-
-## 7. Health checks
-
-| Route | Purpose | Checks |
-|-------|---------|--------|
-| `GET /health` | Liveness | none — `200` while the process runs |
-| `GET /health/ready` | Readiness | `MongoHealthCheck` (name `database`, tag `ready`) runs `{ ping: 1 }` against the configured database. There is **no** Redis check: the translations cache degrades to on-demand assembly if Redis is down, so it is not a readiness dependency. |
-
----
-
-## 8. Configuration and secrets
-
-| Key | Env override | Meaning | Local default |
-|-----|--------------|---------|---------------|
-| `ConnectionStrings:CtmsDatabase` | `ConnectionStrings__CtmsDatabase` | MongoDB connection string | `mongodb://localhost:27017` (`appsettings.json`); `mongodb://mongo:27017` (compose) |
-| `Mongo:Database` | `Mongo__Database` | Database name within the Mongo server (`MongoOptions`, default `ctms`) | `ctms` |
-| `ConnectionStrings:Redis` | `ConnectionStrings__Redis` | Redis connection string for the translations cache; unset = in-process memory cache | `redis:6379` (compose) |
-| `Cache:TranslationsTtlMinutes` | `Cache__TranslationsTtlMinutes` | TTL for a cached assembled map (`TranslationsCacheOptions`); `<= 0` falls back to 60 | `60` |
-| `Seed:Enabled` | `Seed__Enabled` | Run the dev data seeder on startup (Development only, and only when `true`) | `true` in compose; `false` in `appsettings.Development.json` |
-| `ASPNETCORE_ENVIRONMENT` | (same) | `Development` enables Swagger (and the seeder) | `Development` |
-| `AzureAd:Instance` / `:TenantId` / `:ClientId` / `:Audience` | `AzureAd__*` | Entra ID app registration for JWT-bearer validation (§10) | placeholders; set in user-secrets / Key Vault |
-| `Auth:Enabled` | `Auth__Enabled` | `false` = permissive all-roles bypass (local/tests). Refused under `Production`. | `false` in `appsettings.Development.json`, else `true` |
-| `Auth:PublicBundleReads` | `Auth__PublicBundleReads` | `true` = client delivery reads (`GET /api/translations/{app}/{lang}`, `GET /api/languages`, `GET /api/applications`) are anonymous; `false` = require `CanRead` | `true` |
-| `Cors:AllowedOrigins` | `Cors__AllowedOrigins__0`, ... | String array of allowed browser origins for the `"ctms"` CORS policy. Empty ⇒ no cross-origin access (§11, [ADR&nbsp;0003](adr/0003-production-hardening.md)) | `[]` in `appsettings.Production.json` |
-| `RateLimit:Enabled` | `RateLimit__Enabled` | Master switch for the global rate limiter (§11) | `true`; `false` in the integration test factory |
-| `RateLimit:PermitPerWindow` / `:WindowSeconds` / `:QueueLimit` / `:BundlePermitPerWindow` | `RateLimit__*` | Fixed-window limiter knobs. `BundlePermitPerWindow` is the looser limit for the anonymous `GET /api/translations/...` delivery partition (partition prefix `delivery:`); its config key keeps the historical `Bundle` name. | `120` / `60` / `0` / `PermitPerWindow × 5` |
-| `Limits:MaxRequestBodyBytes` | `Limits__MaxRequestBodyBytes` | Max request body size (Kestrel + a `413` middleware); `<= 0` ⇒ default (§11) | `262144` (256 KB) |
-| `Limits:MaxImportBodyBytes` | `Limits__MaxImportBodyBytes` | Larger ceiling for `POST /api/applications/{application}/import` only (opted in via endpoint metadata); `<= 0` ⇒ default (§11, §12) | `5242880` (5 MB) |
-| `Webhooks:Enabled` | `Webhooks__Enabled` | Master switch for publish-webhook dispatch (§13) | `true` |
-| `Webhooks:TimeoutSeconds` | `Webhooks__TimeoutSeconds` | Per-request timeout for a webhook `POST` (§13) | `5` |
-| `Webhooks:MaxAttempts` | `Webhooks__MaxAttempts` | Attempts before a webhook event is dropped (§13) | `3` |
-
-> `appsettings.Production.json` only overrides `Cors:AllowedOrigins`,
-> `RateLimit:Enabled`, `Auth:Enabled` and `Seed:Enabled`; the numeric
-> rate-limit / body-size knobs use the code defaults above. See §11 and
-> [ADR&nbsp;0003](adr/0003-production-hardening.md).
-
-- Config binds `appsettings.json` → `appsettings.{Environment}.json` →
-  environment variables (`__` maps to `:`).
-- **No credentials are committed.** `appsettings.json` ships a passwordless
-  localhost placeholder (`mongodb://localhost:27017`, `Mongo:Database` = `ctms`).
-  `.env` is git-ignored; `.env.example` is the committed template.
-- **Target managed services** (see `deploy/azure/`): Azure Cosmos DB for
-  MongoDB and Azure Cache for Redis. Their connection strings live in Key Vault
-  as `CtmsDatabase-ConnectionString` and `Redis-ConnectionString`; the Container
-  App resolves them via Key Vault references and pulls its image via a
-  user-assigned managed identity (AcrPull).
-- The container terminates TLS at the ingress and listens HTTP-only on `:8080`
-  (root `Dockerfile`).
-
----
-
-## 9. Testing
-
-Three test projects, all xUnit. `dotnet test` runs them all; the build is
-warnings-as-errors (`Directory.Build.props`), so any warning fails CI. On the
-current branch, **30 client + 196 application + 79 integration = 305** test
-cases (`[Fact]` plus `[Theory]` rows), covering the optional-category
-derivation, the four import parsers and the import service, bulk review, the
-grid `status` filter and `source` tag, the publish diff preview, API-key
-authentication, webhook signing / retry / enqueue, and the
-language catalogue / bulk register. The concurrent API-key / webhook branch adds
-more — treat the totals as approximate and re-count from `CLAUDE.md` once it
-lands.
-
-**`tests/CTMS.Application.Tests`** — application services end to end against real
-repositories on a real MongoDB, plus focused unit tests.
-
-- MongoDB via **`EphemeralMongo`**: a `MongoFixture` starts a throwaway in-process
-  `mongod`, shared through the `"mongo"` xUnit collection; each test class builds
-  a `CtmsTestHarness` (one isolated database, every production index applied, all
-  repositories and services wired, an in-memory `IDistributedCache` standing in
-  for Redis). `Infrastructure/Seed.cs` has direct-to-repo arrange helpers. No
-  Docker needed.
-- Covers `Language` / `Project` (application) / `TranslationKey` /
-  `TranslationString` service behaviour, `PublishedTranslationsServiceTests`
-  (assembly order, shared-app merge, fallback walk, omit rule, content hash,
-  cache interaction), `LanguageServiceTests`, `ManagementScreensTests` (grid /
-  categories / dashboard / missing / bulk publish), `AuditService`, and the
-  `ConditionalRequest` `If-None-Match` matcher. `ReviewWorkflowTests` drives the
-  `TranslationString` transitions directly against the domain type.
-- `AuthorizationPoliciesTests` drives the real authorization runtime built from
-  `AuthorizationPolicies.Configure` for every `(role, policy)` pair;
-  `TokenActorTests` covers the actor-from-token helper.
-
-**`tests/CTMS.Api.IntegrationTests`** — the full HTTP surface through a
-`WebApplicationFactory` over the real `Program` composition root and DI graph.
-
-- `MongoFixture` **prefers a real `mongo:7` via `Testcontainers.MongoDb`** when a
-  Docker daemon is reachable and **falls back to `EphemeralMongo`** otherwise.
-- `CtmsApiFactory` overrides Mongo config with the fixture's connection string,
-  leaves `ConnectionStrings:Redis` unset (in-memory cache), sets
-  `Seed:Enabled=false` and `Auth:Enabled=false`, then replaces the default auth
-  scheme with a test handler so the **real `AuthorizationPolicies`** evaluate
-  against header-driven roles.
-- Covers the authorization matrix, actor-from-token, the delivery content-hash
-  `ETag` / `304`, the management screens and bulk publish, history with value
-  diffs, lifecycle, validation / not-found, and health.
-- `Support/ApiHelpers.cs` has request helpers.
-
-**`tests/CTMS.Client.Tests`** — the `CTMS.Client` SDK against a stub
-`HttpMessageHandler`: revalidation / `304` / offline-stale state machine and the
-on-disk cache round-trip / atomic write / corruption handling.
-
-The bundle-versioning and `TranslationString`-concurrency suites were removed with
-ADR 0004.
-
-`NuGetAudit` is disabled on the test projects (EphemeralMongo / Testcontainers
-pull older transitive packages). Shipping projects keep auditing on, so
-`dotnet build` still fails on advisories in product code.
-
----
-
-## 10. Security
-
-Authentication is **Microsoft Entra ID**; authorization is **role-based** via
-named policies. `Microsoft.Identity.Web` on both the API and the Admin UI.
+Each `TranslationString` moves through this machine
+(`TranslationString.ChangeReviewState`; any other pair throws
+`InvalidReviewTransitionException` → HTTP 409):
 
 ```mermaid
-sequenceDiagram
-    actor U as User (browser)
-    participant UI as CTMS.AdminUI (Blazor Server)
-    participant AAD as Entra ID
-    participant API as CTMS.Api
-
-    U->>UI: open a page
-    UI->>AAD: OpenID Connect sign-in (AddMicrosoftIdentityWebApp)
-    AAD-->>UI: id_token + code -> tokens cached (in-memory)
-    U->>UI: act on a screen
-    UI->>AAD: token for API scope (ITokenAcquisition, on-behalf-of user)
-    UI->>API: request + Authorization: Bearer <access_token><br/>(CtmsApiTokenHandler DelegatingHandler)
-    API->>API: validate JWT (AddMicrosoftIdentityWebApi), read roles claim
-    API->>API: evaluate endpoint policy (CanRead / CanEditStrings / ...)
-    API-->>UI: 200 / 401 / 403
+stateDiagram-v2
+    [*] --> Draft: first upsert
+    Draft --> InReview: submit
+    InReview --> Approved: approve
+    InReview --> Draft: reject
+    Approved --> InReview: reopen
+    Approved --> Published: publish
+    Published --> InReview: reopen
+    Draft --> Archived: archive
+    InReview --> Archived: archive
+    Approved --> Archived: archive
+    Published --> Archived: archive
+    Archived --> Draft: unarchive
 ```
 
-### App roles → policies
+Only **`Published`** strings are served to consumers. `Archived` is retired and
+hidden everywhere. Editing a string that has left `Draft` (`InReview`,
+`Approved`, `Published`) sends it back to `InReview`; a `Draft` stays a `Draft`;
+an `Archived` string stays `Archived`. Full transition table and the coverage
+definition: [`translation-workflow.md`](translation-workflow.md).
 
-Five Entra app roles (`ctms.admin`, `ctms.manager`, `ctms.reviewer`,
-`ctms.translator`, `ctms.reader`) map to six policies (`CanRead`,
-`CanEditStrings`, `CanReview`, `CanManageContent`, `CanPublish`,
-`CanAdminProjects`). An authenticated principal with **no** recognised role
-satisfies no policy (`403` everywhere except `/health` / Swagger and the
-anonymous delivery reads). The full matrix is in
-[api.md → Authentication & authorization](api.md#authentication--authorization).
+## 6. Persistence — MongoDB
 
-### Where it is defined
+Source of truth. Only CTMS touches the translation collections. Details:
+[`database.md`](database.md).
 
-| Concern | Location |
-|---------|----------|
-| Role name constants | `src/CTMS.Api/Auth/AuthRoles.cs` (mirror: `src/CTMS.AdminUI/Auth/AuthRoles.cs`) |
-| Role → policy mapping (single source) | `src/CTMS.Api/Auth/AuthorizationPolicies.cs` (mirror in `CTMS.AdminUI/Auth`) |
-| API auth wiring + Production guard | `src/CTMS.Api/Auth/AuthenticationSetup.cs` (`builder.AddCtmsAuth()`); `Auth:PublicBundleReads` read via `IConfiguration.PublicBundleReads()` |
-| Endpoint policy assignment | `.RequireAuthorization("<policy>")` in each `src/CTMS.Api/Endpoints/*.cs`; the delivery reads use `.GatePublicRead(...)` (`Endpoints/EndpointConventions.cs`) |
-| Actor-from-token | `src/CTMS.Api/Auth/TokenActor.cs`, called from the key-create / string-upsert / review / bulk-publish endpoints |
-| Local-dev bypass | `DevBypassAuthHandler` in each project's `Auth/` folder (`Auth:Enabled=false`) |
-| Admin UI token acquisition | `src/CTMS.AdminUI/Services/CtmsApiTokenHandler.cs` |
-| Admin UI claims accessor / role gating | `src/CTMS.AdminUI/Services/CurrentUser.cs`, `<AuthorizeView Policy="...">` in pages |
+- `AddInfrastructure` registers a singleton `IMongoClient` from
+  `ConnectionStrings:CtmsDatabase`, a singleton `IMongoContext` →
+  `CtmsMongoContext` on database `Mongo:Database` (default `ctms`), five scoped
+  repositories, `NoOpUnitOfWork`, `MongoHealthCheck` (tag `ready`), the
+  translations cache, and the `MongoIndexInitializer` + `DataSeeder` hosted
+  services.
+- **No migration tool.** `MongoIndexInitializer` runs `createIndexes`
+  (idempotent) on every startup; schema evolution is additive and
+  `IgnoreExtraElements` tolerates unknown fields.
+- `NoOpUnitOfWork` — each repository call is a single-document atomic write.
+  Cross-document consistency (publish + audit) relies on operation ordering and
+  idempotency, not a transaction.
+- Referential integrity and cascade deletes are enforced in the services /
+  repositories.
 
-The client-delivery route is `/api/translations/{application}/{language}` (plus
-`GET /api/languages`, `GET /api/applications`); these are `AllowAnonymous` while
-`Auth:PublicBundleReads=true` and `CanRead` otherwise. The API trusts nothing but
-the validated JWT — the `updatedBy` / `reviewedBy` / `createdBy` body fields are
-overridden with the token identity whenever a real token is present.
+## 7. Redis cache
 
----
+Cache only; MongoDB stays the source of truth. Read-through, key
+`translations:{project}:{language}`, TTL `Cache:TranslationsTtlMinutes`
+(default 60). Backed by StackExchange.Redis when `ConnectionStrings:Redis` is
+set, otherwise an in-process `IDistributedCache` — behaviour is identical.
+Invalidated when a string enters or leaves `Published`, on bulk publish, and on
+bulk review; a **`common`** change fans the invalidation out to every project for
+the affected languages. A Redis outage degrades to on-demand assembly and is
+**not** a readiness dependency (spec §50). Details: [`caching.md`](caching.md).
+Redis also backs the ASP.NET Data Protection key ring
+([`authentication.md`](authentication.md)).
+
+## 8. Security
+
+Authentication: Microsoft **Entra ID / OpenID Connect** for the management
+surface. Authorization: five roles → six named policies, enforced at the API
+layer. The consumer read is anonymous by default (`Auth:PublicBundleReads`).
+Details: [`authentication.md`](authentication.md),
+[`authorisation.md`](authorisation.md).
+
+## 9. Health, logging, failure behaviour
+
+- `GET /health`, `GET /health/live` — liveness, no checks.
+- `GET /health/ready` — readiness; runs `MongoHealthCheck` (`{ ping: 1 }`). No
+  Redis check.
+- Structured JSON console logging outside Development; `TraceId` on every scope,
+  lining up with the `traceId` on RFC 7807 error bodies; one HTTP log line per
+  request (`/health*` excluded).
+- Redis down → serve from MongoDB. MongoDB down → `/health/ready` is `503` and
+  delivery raises an error rather than returning wrong data (spec §50).
+
+## 10. Configuration and secrets
+
+Config resolves `appsettings.json` → `appsettings.{Environment}.json` →
+environment variables (`__` maps to `:`). **No credentials are committed** —
+`appsettings.json` ships a passwordless localhost Mongo placeholder. Key
+settings:
+
+| Key | Env override | Meaning |
+|---|---|---|
+| `ConnectionStrings:CtmsDatabase` | `ConnectionStrings__CtmsDatabase` | MongoDB connection string (required) |
+| `Mongo:Database` | `Mongo__Database` | Database name (default `ctms`) |
+| `ConnectionStrings:Redis` | `ConnectionStrings__Redis` | Redis (`host:port[,options]`); unset ⇒ in-process cache |
+| `Cache:TranslationsTtlMinutes` | `Cache__TranslationsTtlMinutes` | Cached-map TTL (default 60) |
+| `Auth:Enabled` | `Auth__Enabled` | `false` = dev all-roles bypass; refused under Production |
+| `Auth:PublicBundleReads` | `Auth__PublicBundleReads` | `true` = anonymous consumer read |
+| `AzureAd:Instance` / `:TenantId` / `:ClientId` / `:Audience` | `AzureAd__*` | Entra ID app registration for JWT validation |
+| `Seed:Enabled` | `Seed__Enabled` | Dev-only data seeder |
+| `Cors:AllowedOrigins` | `Cors__AllowedOrigins__0` … | Browser origins allowed by the `ctms` CORS policy (empty ⇒ none) |
+| `RateLimit:*` | `RateLimit__*` | Global fixed-window limiter knobs |
+| `Limits:MaxRequestBodyBytes` / `:MaxImportBodyBytes` | `Limits__*` | 256 KB body cap; 5 MB for the import route |
+
+Target managed services (see [`azure-deployment.md`](azure-deployment.md)):
+Azure Cosmos DB for MongoDB and Azure Cache for Redis, connection strings in Key
+Vault. The container terminates TLS upstream and listens HTTP-only on `:8080`.
 
 ## 11. Production hardening
 
-Wired in `Program.cs` from `src/CTMS.Api/Infrastructure/*Setup` helpers; every
-item is configuration-driven and inert in `Development` / tests. Rationale and
-trade-offs: [ADR&nbsp;0003](adr/0003-production-hardening.md). Config keys: §8.
+Config-driven, inert in Development/tests. `CorsSetup` (one `ctms` policy, empty
+allow-list ⇒ no cross-origin), `RateLimitingSetup` (global partitioned
+fixed-window limiter; the anonymous delivery GET gets its own looser IP
+partition; `429` + RFC 7807 + `Retry-After`), `RequestBodySizeLimit` (`413` +
+RFC 7807; the import route opts into a larger ceiling), `DataProtectionSetup`
+(key ring to Redis), `LoggingSetup` (JSON console + trace ids). Rationale:
+[`adr/0003-production-hardening.md`](adr/0003-production-hardening.md).
 
-| Concern | Helper | Behaviour |
-|---------|--------|-----------|
-| **CORS** | `CorsSetup` (`UseCors` before auth) | One policy `"ctms"`. `Cors:AllowedOrigins` empty ⇒ no cross-origin access; when set, those origins with any header/method, credentials allowed, `ETag` + `Location` exposed. |
-| **Rate limiting** | `RateLimitingSetup` (`UseRateLimiter` after auth) | Global fixed-window limiter partitioned by token user-id (authenticated) or remote IP; the anonymous `GET /api/translations/...` delivery path gets a separate looser IP partition (partition prefix `delivery:`, limit `RateLimit:BundlePermitPerWindow`). `429` + RFC 7807 + `Retry-After`. `/health*` opt out. Off when `RateLimit:Enabled=false`. |
-| **Request-size cap** | `RequestBodySizeLimit` (middleware, early) | `Limits:MaxRequestBodyBytes` (256 KB default) on Kestrel and via a `413` + RFC 7807 middleware that also covers the test host and chunked bodies. An endpoint carrying the `LargeImportBody` metadata marker — only `POST /api/applications/{application}/import` — is checked against `Limits:MaxImportBodyBytes` (5 MB default) instead. |
-| **Data Protection** | `DataProtectionSetup` | `SetApplicationName("CTMS")`; key ring persisted to Redis (`ConnectionStrings:Redis`, key `DataProtection-Keys`) so replicas share keys across restarts; local ephemeral fallback + info log when Redis is unset. At-rest key encryption is a `TODO`. |
-| **Structured logging** | `LoggingSetup` | JSON console (`AddJsonConsole`, scopes on, UTC) outside Development; `TraceId`/`SpanId`/`ParentId` on every scope (lines up with the `traceId` on ProblemDetails bodies); one HTTP log line per request (method, path, status, elapsed), `/health*` excluded. |
+## 12. Testing
 
-`docker-compose.prod.yml` is the compose profile that exercises this (auth on,
-`ASPNETCORE_ENVIRONMENT=Production`, Redis required).
+Three xUnit projects, ~287 cases. Application services run end-to-end against a
+real in-process MongoDB (`EphemeralMongo`); the HTTP suite runs the real
+`Program` through `WebApplicationFactory` (Testcontainers `mongo:7` when Docker
+is present, else `EphemeralMongo`); the client suite runs against a stub handler.
+`TranslationServiceRegistrationTests` verifies an internal consumer can register
+and call `ITranslationService` with no HTTP. See
+[`../CLAUDE.md`](../CLAUDE.md) and
+[`existing-solution-assessment.md`](existing-solution-assessment.md).
 
----
+## 13. Architecture decision records
 
-## 12. Bulk import
-
-`TranslationImportService` (`CTMS.Application/Translations/Import`) loads a
-translation file into one `(application, language)` in a single call — the
-migration path off scattered `.resx` / JSON / CSV / properties files. Route:
-[api.md → Bulk operations](api.md#bulk-operations). Policy `CanManageContent`.
-
-### The parsers
-
-`TranslationFileParser.Parse(format, content)` is **HTTP-free** and returns an
-ordered, de-duplicated list of `(key, value)` entries. Four formats:
-
-| `format` | Notes |
-|----------|-------|
-| `flat` | `key=value` per line; `#` comments and blank lines skipped; value trimmed; a line with no `=` or an empty key raises `ImportFormatException` with the line number. |
-| `csv` | Minimal RFC-4180 reader (quoted fields, `""` escapes, embedded newlines). The header row must name a `key` column and a `value` column (case-insensitive); a short row or unclosed quote is an error with the line number. |
-| `json` | `System.Text.Json`. Root must be an object. A nested object is flattened with `.` between segments; string values pass through, numbers / booleans are stringified, `null` → `""`, arrays are rejected. A parse error carries the `JsonException` line. |
-| `resx` | `System.Xml.Linq`. Takes `<data name="…"><value>…</value></data>`; skips entries with a `type=` or `mimetype=` attribute (typed / file-backed resources) and anything without a `<value>`. Malformed XML raises with the `XmlException` line. |
-
-A later duplicate key overrides an earlier one; the first occurrence fixes
-ordering. `ImportFormatException` derives from `ValidationException`, so the API
-maps it to `400` and the message is `Line <n>: <reason>` when a line is known.
-
-### Apply
-
-`ImportAsync` parses **first** (so a malformed body is `400` before any store
-round-trip), resolves the application (`404`) and the language — which must be in
-the application's `EnabledLanguageCodes` (`404`) — then, per entry:
-
-1. **Key create-if-missing.** An unknown `keyName` becomes a new `TranslationKey`
-   whose `Category` is the request `category` when supplied, otherwise
-   `CategorySuggestion.FromKeyName(keyName)` (the prefix rule, §2). `CreatedBy` is
-   the caller identity. A key name outside `[A-Za-z0-9_.-]+` is pushed to
-   `errors` (with the raw key) and skipped — the import continues.
-2. **String upsert.** The `TranslationString` for `(key, language)` is created or
-   edited to the entry value, then walked through the review state machine to the
-   requested `status` — `Draft` (default), `NeedsReview` or `Approved`.
-   `Published` is rejected (`400`). An entry whose value and state already match
-   is counted in `skipped`.
-3. **Audit.** A `Created` or `Edited` `AuditEntry` per changed string.
-
-Writes are staged in memory and flushed in one pass (new keys, new strings,
-changed strings, audit entries, then `SaveChanges`). **`dryRun: true` runs steps
-1–2 to build the plan and the counts and writes nothing.** If any imported string
-enters or leaves `Published`, the delivery cache for `(application, language)` is
-invalidated once at the end. The response echoes the counts, the per-row
-`errors`, and up to 200 distinct key names.
-
-### Per-row error model
-
-The import is **not** all-or-nothing: `ImportError { line?, key?, message }`
-rows accumulate for bad key names while valid entries still apply. A *parse*
-failure (bad `format` or malformed `content`) is the exception — it fails the
-whole request with `400` before anything is written.
-
----
-
-## 13. Integration surface
-
-Machine callers — CI jobs, server-rendered sites, CDN origins — need two things
-the browser-oriented Entra flow does not give them well: a credential that does
-not require an interactive token exchange, and a push signal when a bundle
-changes.
-
-### API-key authentication
-
-- **`X-Api-Key` header.** A read-only scheme registered next to the JWT bearer
-  scheme and **composed** with it (a forward/selector scheme picks per request;
-  each `/api/*` policy still evaluates normally). Bearer is attempted first; a
-  request with no bearer but a valid `X-Api-Key` authenticates as a synthetic
-  principal holding the single role `ctms.reader` → satisfies `CanRead`, nothing
-  else. Every write policy still returns `403` for a key caller.
-- **`ApiKey` aggregate** (collection `apiKeys`): the key is stored **hashed**,
-  never raw; `POST /api/api-keys` returns the raw value **once**. `LastUsedAt` is
-  stamped on each authenticated request.
-- **Lifecycle routes** `POST` / `GET` / `DELETE /api/api-keys/{id}` are
-  `CanAdminProjects`. `DELETE` revokes immediately.
-- Active whenever `Auth:Enabled=true`; the `Auth:Enabled=false` all-roles bypass
-  supersedes it locally / in tests.
-
-### Publish webhooks
-
-- **`Webhook` aggregate** (collection `webhooks`): `Url` + a signing `secret`
-  returned once by `POST /api/webhooks`. Lifecycle routes are `CanAdminProjects`.
-- **Dispatch.** A publish (single-string `publish`, bulk review `publish`, or
-  `POST /api/translations/publish`) writes the changed `(application, language)`
-  pairs onto an in-process `Channel`; a hosted `BackgroundService` drains it and
-  `POST`s every registered webhook a JSON body
-  `{ event: "published", application, language, etag, publishedAt }`, where
-  `etag` is the same content hash the delivery route serves.
-- **Signature.** `X-CTMS-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>`.
-  A consumer recomputes the HMAC over the raw received bytes and compares in
-  constant time; `publishedAt` should be bounded to a few minutes against replay.
-  Worked example: [api.md → verifying the signature](api.md#publish-webhooks).
-- **Retry / give-up.** Up to `Webhooks:MaxAttempts` (default 3) tries, each with
-  a `Webhooks:TimeoutSeconds` (default 5) timeout; after the last failure the
-  event is **logged and dropped** — the queue is not retained indefinitely. A
-  missed webhook therefore still requires the consumer to fall back to a
-  conditional `GET` with `If-None-Match`.
-- **Isolation.** Dispatch is fire-and-forget off the background channel: a slow
-  or failing webhook **never** delays or fails the publish or its HTTP response.
-- **Off switch.** `Webhooks:Enabled=false` disables dispatch entirely (routes may
-  still register webhooks).
+[`adr/`](adr/) — Nygard format. `0001` (record ADRs) and `0002` (MongoDB) stand.
+`0003`–`0005` are partly superseded by this document — see
+[`adr/README.md`](adr/README.md): assemble-on-demand delivery and the model
+simplification stand; the API-key and webhook decisions in `0005` are reverted.

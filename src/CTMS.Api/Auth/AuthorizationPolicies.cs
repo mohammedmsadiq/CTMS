@@ -26,7 +26,7 @@ public static class AuthorizationPolicies
     /// <summary>Create/edit translation string values (the string upsert).</summary>
     public const string CanEditStrings = "CanEditStrings";
 
-    /// <summary>Review transitions — submit/approve/reject/reopen and the <c>publish</c> review action.</summary>
+    /// <summary>Review transitions other than <c>submit</c> — approve/reject/reopen/publish/archive/unarchive. <c>submit</c> only needs <c>CanEditStrings</c>.</summary>
     public const string CanReview = "CanReview";
 
     /// <summary>Manage locales and translation keys (create/update/delete).</summary>

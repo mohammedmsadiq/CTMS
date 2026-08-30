@@ -1,0 +1,62 @@
+# -----------------------------------------------------------------------------
+# Reusable DOCKER BUILD + PUBLISH ARTIFACTS for CTMS.
+#
+#   1. `dotnet publish src/CTMS.Api` -> pipeline artifact `ctms-api`
+#      (a self-contained framework-dependent publish of the API graph).
+#   2. `docker buildAndPush` the root Dockerfile to ACR. Build context is the
+#      repo root, matching the Dockerfile's own contract.
+#
+# Runs on `main` only (the caller gates the stage). No secret values here — the
+# registry service connection name comes from the `ctms-acr` variable group.
+# -----------------------------------------------------------------------------
+parameters:
+  - name: buildConfiguration
+    type: string
+    default: Release
+  - name: acrServiceConnection
+    type: string          # Docker registry service connection name (ctms-acr group)
+  - name: imageRepository
+    type: string          # e.g. ctms/api (ctms-acr group)
+
+steps:
+  - task: UseDotNet@2
+    displayName: Install .NET SDK (pinned by global.json)
+    inputs:
+      packageType: sdk
+      useGlobalJson: true
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet restore
+    inputs:
+      command: restore
+      projects: CTMS.sln
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet publish (src/CTMS.Api)
+    inputs:
+      command: publish
+      publishWebProjects: false
+      zipAfterPublish: true
+      projects: src/CTMS.Api/CTMS.Api.csproj
+      arguments: >-
+        -c ${{ parameters.buildConfiguration }}
+        --no-restore
+        -o "$(Build.ArtifactStagingDirectory)/api"
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish API build artifact
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/api"
+      artifact: ctms-api
+
+  - task: Docker@2
+    displayName: Build & push CTMS API image to ACR
+    inputs:
+      command: buildAndPush
+      containerRegistry: ${{ parameters.acrServiceConnection }}
+      repository: ${{ parameters.imageRepository }}
+      dockerfile: "$(Build.SourcesDirectory)/Dockerfile"
+      buildContext: "$(Build.SourcesDirectory)"
+      tags: |
+        $(Build.BuildNumber)
+        latest

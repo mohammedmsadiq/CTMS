@@ -1,0 +1,54 @@
+# -----------------------------------------------------------------------------
+# Reusable CODE COVERAGE merge for CTMS.
+#
+# Downloads the raw Cobertura files that each test tier published
+# (coverage-unit, coverage-integration), merges them with ReportGenerator into
+# one Cobertura + HTML report, and publishes the combined result to the run.
+#
+# The per-tier PublishCodeCoverageResults@2 calls in test-steps.yml already show
+# each tier's coverage; this stage is the single cross-tier number.
+# -----------------------------------------------------------------------------
+parameters:
+  - name: coverageArtifacts
+    type: object
+    default:
+      - coverage-unit
+      - coverage-integration
+
+steps:
+  - task: UseDotNet@2
+    displayName: Install .NET SDK (pinned by global.json)
+    inputs:
+      packageType: sdk
+      useGlobalJson: true
+
+  - ${{ each artifact in parameters.coverageArtifacts }}:
+      - task: DownloadPipelineArtifact@2
+        displayName: Download ${{ artifact }}
+        inputs:
+          artifact: ${{ artifact }}
+          path: $(Pipeline.Workspace)/coverage/${{ artifact }}
+
+  - script: dotnet tool install --global dotnet-reportgenerator-globaltool
+    displayName: Install ReportGenerator
+
+  - script: |
+      export PATH="$PATH:$HOME/.dotnet/tools"
+      reportgenerator \
+        "-reports:$(Pipeline.Workspace)/coverage/**/coverage.cobertura.xml" \
+        "-targetdir:$(Build.ArtifactStagingDirectory)/coverage" \
+        "-reporttypes:Cobertura;HtmlInline_AzurePipelines;TextSummary"
+      cat "$(Build.ArtifactStagingDirectory)/coverage/Summary.txt" || true
+    displayName: Merge coverage (ReportGenerator)
+
+  - task: PublishCodeCoverageResults@2
+    displayName: Publish combined coverage
+    inputs:
+      summaryFileLocation: "$(Build.ArtifactStagingDirectory)/coverage/Cobertura.xml"
+      pathToSources: $(Build.SourcesDirectory)
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish combined coverage artifact
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/coverage"
+      artifact: coverage-combined

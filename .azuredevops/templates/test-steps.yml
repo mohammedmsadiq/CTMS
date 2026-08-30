@@ -1,63 +1,72 @@
 # -----------------------------------------------------------------------------
-# Reusable test steps for CTMS.
+# Reusable TEST steps for CTMS — one invocation per test tier.
 #
-# Runs `dotnet test` at solution scope with Coverlet's "XPlat Code Coverage"
-# collector, then publishes the VSTest .trx results and the Cobertura coverage
-# report so they show up on the pipeline run summary. A single run is enough:
-# the Azure DevOps Tests tab already groups results by test assembly, so
-# `CTMS.Api.IntegrationTests` shows as its own group without splitting the
-# invocation.
+# Restores + builds (via build-steps.yml, so `dotnet test --no-build` has its
+# outputs), runs `dotnet test` for the given project set with Coverlet's
+# "XPlat Code Coverage" collector, publishes the .trx results and the Cobertura
+# report to the run, and publishes the raw coverage files as a pipeline artifact
+# so the Coverage stage can merge every tier into one report.
 #
-# MongoDB: neither suite reads ConnectionStrings:CtmsDatabase, so no service
-# container or connection-string env var is wired here (azure-pipelines.yml
-# dropped its `mongo:7` service for the same reason; GitHub Actions matches):
+# MongoDB: no tier reads ConnectionStrings:CtmsDatabase, so no service container
+# is wired.
 #   * CTMS.Application.Tests    - EphemeralMongo starts an in-process mongod.
+#   * CTMS.Client.Tests        - a stub HttpMessageHandler; no datastore.
 #   * CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent has a
 #     Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo. The
-#     WebApplicationFactory overrides the API's Mongo config with the fixture's
-#     connection string.
+#     WebApplicationFactory overrides the API's Mongo config with the fixture's.
 #
-# NOTE: the test projects set <NuGetAudit>false</NuGetAudit> (EphemeralMongo
-# pulls older SharpCompress/Snappier, Testcontainers pulls SSH.NET). The solution
-# build keeps auditing on, so `dotnet build` still fails on advisories in
-# shipping code.
+# NOTE: the test projects set <NuGetAudit>false</NuGetAudit> (EphemeralMongo /
+# Testcontainers pull older transitive packages). The security scan runs against
+# the shipping projects only; the solution build keeps auditing on.
 # -----------------------------------------------------------------------------
 parameters:
   - name: buildConfiguration
     type: string
     default: Release
-  - name: solution
+  - name: displayName
     type: string
-    default: CTMS.sln
-  - name: resultsDirectory
-    type: string
-    default: $(Agent.TempDirectory)/TestResults
+  - name: runName
+    type: string          # short slug, used in the results directory + artifact name
+  - name: testProjects
+    type: string          # one .csproj per line (DotNetCoreCLI accepts a newline list)
 
 steps:
+  - template: build-steps.yml
+    parameters:
+      buildConfiguration: ${{ parameters.buildConfiguration }}
+
   - task: DotNetCoreCLI@2
-    displayName: dotnet test (+ XPlat Code Coverage)
+    displayName: ${{ parameters.displayName }}
     inputs:
       command: test
-      projects: ${{ parameters.solution }}
+      projects: ${{ parameters.testProjects }}
       arguments: >-
         -c ${{ parameters.buildConfiguration }}
         --no-build
-        --logger trx
+        --logger "trx;LogFileName=${{ parameters.runName }}.trx"
         --collect:"XPlat Code Coverage"
-        --results-directory "${{ parameters.resultsDirectory }}"
+        --results-directory "$(Agent.TempDirectory)/TestResults/${{ parameters.runName }}"
 
   - task: PublishTestResults@2
-    displayName: Publish test results (.trx)
+    displayName: Publish test results (${{ parameters.runName }})
     condition: succeededOrFailed()
     inputs:
       testResultsFormat: VSTest
-      testResultsFiles: "${{ parameters.resultsDirectory }}/**/*.trx"
+      testResultsFiles: "$(Agent.TempDirectory)/TestResults/${{ parameters.runName }}/**/*.trx"
       mergeTestResults: true
       failTaskOnFailedTests: true
+      testRunTitle: ${{ parameters.displayName }}
 
   - task: PublishCodeCoverageResults@2
-    displayName: Publish code coverage (Cobertura)
+    displayName: Publish coverage to run (${{ parameters.runName }})
     condition: succeededOrFailed()
     inputs:
-      summaryFileLocation: "${{ parameters.resultsDirectory }}/**/coverage.cobertura.xml"
+      summaryFileLocation: "$(Agent.TempDirectory)/TestResults/${{ parameters.runName }}/**/coverage.cobertura.xml"
       pathToSources: $(Build.SourcesDirectory)
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish raw coverage artifact (${{ parameters.runName }})
+    condition: succeededOrFailed()
+    inputs:
+      targetPath: "$(Agent.TempDirectory)/TestResults/${{ parameters.runName }}"
+      artifact: coverage-${{ parameters.runName }}
