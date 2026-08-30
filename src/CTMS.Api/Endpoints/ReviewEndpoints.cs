@@ -10,12 +10,12 @@ internal static class ReviewEndpoints
         // All review transitions — submit/approve/reject/reopen and the `publish` action —
         // require CanReview (admin/manager/reviewer). Bulk publish is separate (CanPublish).
         var group = endpoints
-            .MapGroup("/api/applications/{application}/keys/{keyId:guid}/strings/{language}/review")
+            .MapGroup("/api/projects/{project}/keys/{keyId:guid}/strings/{language}/review")
             .WithTags("Review")
             .RequireAuthorization(AuthorizationPolicies.CanReview);
 
         group.MapPost("/", async (
-                string application,
+                string project,
                 Guid keyId,
                 string language,
                 ReviewRequest request,
@@ -27,7 +27,7 @@ internal static class ReviewEndpoints
                 var reviewedBy = TokenActor.Resolve(http.User, request.ReviewedBy, request.ReviewedBy);
 
                 var reviewed = await strings.ReviewAsync(
-                    application,
+                    project,
                     keyId,
                     language,
                     request.Action,

@@ -30,7 +30,7 @@ public sealed class AuditTests : IDisposable
         var entityId = Guid.NewGuid();
         await _harness.Audit.AppendAsync(new AuditEntry(_projectId, "TranslationString", entityId, AuditAction.Created, "a"));
         await _harness.Audit.AppendAsync(new AuditEntry(
-            _projectId, "TranslationString", entityId, AuditAction.Submitted, "b", ReviewState.Draft, ReviewState.NeedsReview));
+            _projectId, "TranslationString", entityId, AuditAction.Submitted, "b", ReviewState.Draft, ReviewState.InReview));
         await _harness.Audit.AppendAsync(new AuditEntry(_projectId, "TranslationString", Guid.NewGuid(), AuditAction.Created, "c"));
 
         var entries = await _harness.Audit.ListByEntityAsync("TranslationString", entityId);
@@ -68,7 +68,7 @@ public sealed class AuditTests : IDisposable
 
         var page = await _harness.AuditService.ListByApplicationAsync("acme-web", 0, 50);
 
-        Assert.Equal(_projectId, page!.Items[0].ApplicationId);
+        Assert.Equal(_projectId, page!.Items[0].ProjectId);
     }
 
     [Fact]

@@ -134,7 +134,7 @@ file sealed class FakeCtmsHandler(string application) : HttpMessageHandler
 
         var payload = JsonSerializer.Serialize(new
         {
-            application,
+            project = application,
             language,
             translations,
         });

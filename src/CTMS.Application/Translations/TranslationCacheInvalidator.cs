@@ -5,7 +5,7 @@ namespace CTMS.Application.Translations;
 
 /// <summary>
 /// Invalidates the assembled-translations cache for an application and a set of languages.
-/// A <see cref="Project.IsShared"/> application contributes to every application's bundle, so
+/// A <see cref="Project.IsCommon"/> project contributes to every project's bundle, so
 /// invalidating it fans out across every application's cache for those languages.
 /// </summary>
 public sealed class TranslationCacheInvalidator
@@ -34,7 +34,7 @@ public sealed class TranslationCacheInvalidator
             return;
         }
 
-        var applicationCodes = application.IsShared
+        var applicationCodes = application.IsCommon
             ? (await _projects.ListAsync(includeInactive: true, cancellationToken)).Select(p => p.Slug).ToList()
             : [application.Slug];
 

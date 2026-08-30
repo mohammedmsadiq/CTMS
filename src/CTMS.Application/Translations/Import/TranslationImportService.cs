@@ -236,20 +236,21 @@ public sealed class TranslationImportService
         }
 
         var candidate = status.Trim();
-        if (string.Equals(candidate, nameof(ReviewState.Published), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(candidate, nameof(ReviewState.Published), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate, nameof(ReviewState.Archived), StringComparison.OrdinalIgnoreCase))
         {
             throw new ValidationException(
-                "Import cannot set the 'Published' status; publish through the review workflow instead.");
+                $"Import cannot set the '{candidate}' status; use the review workflow instead.");
         }
 
         if (Enum.TryParse<ReviewState>(candidate, ignoreCase: true, out var parsed)
-            && parsed is ReviewState.Draft or ReviewState.NeedsReview or ReviewState.Approved)
+            && parsed is ReviewState.Draft or ReviewState.InReview or ReviewState.Approved)
         {
             return parsed;
         }
 
         throw new ValidationException(
-            $"'{status}' is not a valid import status. Expected 'Draft', 'NeedsReview' or 'Approved'.");
+            $"'{status}' is not a valid import status. Expected 'Draft', 'InReview' or 'Approved'.");
     }
 
     private static void DriveReviewState(TranslationString subject, ReviewState target, string actor)
@@ -266,9 +267,9 @@ public sealed class TranslationImportService
             ? current + 1
             : current switch
             {
-                ReviewState.Published => ReviewState.NeedsReview,
-                ReviewState.Approved => ReviewState.NeedsReview,
-                ReviewState.NeedsReview => ReviewState.Draft,
+                ReviewState.Published => ReviewState.InReview,
+                ReviewState.Approved => ReviewState.InReview,
+                ReviewState.InReview => ReviewState.Draft,
                 _ => target,
             };
 

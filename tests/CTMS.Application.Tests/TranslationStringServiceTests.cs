@@ -61,7 +61,7 @@ public sealed class TranslationStringServiceTests : IDisposable
 
         var result = await Service.UpsertAsync("acme-web", _keyId, "fr-FR", new UpsertTranslationStringRequest("same"));
 
-        Assert.Equal("Approved", result.String.Status); // not knocked back to NeedsReview
+        Assert.Equal("Approved", result.String.Status); // not knocked back to InReview
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public sealed class TranslationStringServiceTests : IDisposable
         var result = await Service.UpsertAsync(
             "acme-web", _keyId, "fr-FR", new UpsertTranslationStringRequest("v2", UpdatedBy: "alice"));
 
-        Assert.Equal("NeedsReview", result.String.Status);
+        Assert.Equal("InReview", result.String.Status);
     }
 
     [Fact]

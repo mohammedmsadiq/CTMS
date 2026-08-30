@@ -9,11 +9,11 @@ public class ValidationException : Exception
     }
 }
 
-/// <summary>Raised when creating an application whose slug/code is already taken.</summary>
+/// <summary>Raised when creating a project whose slug/code is already taken.</summary>
 public sealed class SlugAlreadyInUseException : Exception
 {
     public SlugAlreadyInUseException(string slug)
-        : base($"An application with the code '{slug}' already exists.")
+        : base($"A project with the code '{slug}' already exists.")
         => Slug = slug;
 
     public string Slug { get; }

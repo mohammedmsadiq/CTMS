@@ -32,7 +32,7 @@ public interface ICtmsClient
     /// <summary>Thin passthrough over <c>GET /api/languages</c> — the active language catalogue.</summary>
     Task<IReadOnlyList<LanguageInfo>> GetLanguagesAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Thin passthrough over <c>GET /api/applications</c> — the active application catalogue.</summary>
+    /// <summary>Thin passthrough over <c>GET /api/projects</c> — the active application catalogue.</summary>
     Task<IReadOnlyList<ApplicationInfo>> GetApplicationsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -17,29 +17,34 @@ internal static class TranslationEndpoints
 
         var group = endpoints.MapGroup("/api/translations").WithTags("Translations");
 
-        // ---- Client delivery: assemble-on-demand, ETag + If-None-Match ----------------------
-        group.MapGet("/{application}/{language}", async (
-                string application,
+        // ---- Client delivery: thin adapter over ITranslationService, ETag + If-None-Match ----
+        group.MapGet("/{project}/{language}", async (
+                string project,
                 string language,
-                PublishedTranslationsService service,
+                ITranslationService translations,
                 HttpContext http,
                 CancellationToken cancellationToken) =>
             {
-                var view = await service.GetPublishedAsync(application, language, cancellationToken);
-                if (view is null)
+                TranslationBundle bundle;
+                try
+                {
+                    bundle = await translations.GetTranslationsAsync(project, language, cancellationToken);
+                }
+                catch (NotFoundException)
                 {
                     return Results.NotFound();
                 }
 
-                http.Response.Headers.ETag = $"\"{view.Hash}\"";
+                http.Response.Headers.ETag = $"\"{bundle.ETag}\"";
                 http.Response.Headers.CacheControl = "no-cache";
 
-                if (ConditionalRequest.IsNotModified(http.Request.Headers.IfNoneMatch, view.Hash))
+                if (ConditionalRequest.IsNotModified(http.Request.Headers.IfNoneMatch, bundle.ETag))
                 {
                     return Results.StatusCode(StatusCodes.Status304NotModified);
                 }
 
-                return Results.Ok(new PublishedTranslationsResponse(view.Application, view.Language, view.Translations));
+                return Results.Ok(
+                    new PublishedTranslationsResponse(bundle.Project, bundle.Language, bundle.Translations));
             })
             .WithName("GetPublishedTranslations")
             .Produces<PublishedTranslationsResponse>()
@@ -51,7 +56,7 @@ internal static class TranslationEndpoints
         group.MapGet("/", async (
                 PublishedTranslationsService service,
                 CancellationToken cancellationToken,
-                string? application = null,
+                string? project = null,
                 string? category = null,
                 string? language = null,
                 string? search = null,
@@ -60,7 +65,7 @@ internal static class TranslationEndpoints
                 int take = 50) =>
             {
                 var page = await service.GetGridAsync(
-                    application, category, language, search, skip, take, status, cancellationToken);
+                    project, category, language, search, skip, take, status, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
             .WithName("ListTranslationGrid")
@@ -73,10 +78,10 @@ internal static class TranslationEndpoints
         group.MapGet("/publish/preview", async (
                 PublishedTranslationsService service,
                 CancellationToken cancellationToken,
-                string? application = null,
+                string? project = null,
                 string? language = null) =>
             {
-                var preview = await service.GetPublishPreviewAsync(application, language, cancellationToken);
+                var preview = await service.GetPublishPreviewAsync(project, language, cancellationToken);
                 return preview is null ? Results.NotFound() : Results.Ok(preview);
             })
             .WithName("PreviewTranslationsPublish")
@@ -89,12 +94,12 @@ internal static class TranslationEndpoints
         group.MapGet("/missing", async (
                 PublishedTranslationsService service,
                 CancellationToken cancellationToken,
-                string? application = null,
+                string? project = null,
                 string? language = null,
                 int skip = 0,
                 int take = 50) =>
             {
-                var page = await service.GetMissingAsync(application, language, skip, take, cancellationToken);
+                var page = await service.GetMissingAsync(project, language, skip, take, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
             .WithName("ListMissingTranslations")
@@ -122,9 +127,9 @@ internal static class TranslationEndpoints
         endpoints.MapGet("/api/categories", async (
                 PublishedTranslationsService service,
                 CancellationToken cancellationToken,
-                string? application = null) =>
+                string? project = null) =>
             {
-                var categories = await service.GetCategoriesAsync(application, cancellationToken);
+                var categories = await service.GetCategoriesAsync(project, cancellationToken);
                 return categories is null ? Results.NotFound() : Results.Ok(categories);
             })
             .WithName("ListCategories")
@@ -137,9 +142,9 @@ internal static class TranslationEndpoints
         endpoints.MapGet("/api/dashboard", async (
                 PublishedTranslationsService service,
                 CancellationToken cancellationToken,
-                string? application = null) =>
+                string? project = null) =>
             {
-                var dashboard = await service.GetDashboardAsync(application, cancellationToken);
+                var dashboard = await service.GetDashboardAsync(project, cancellationToken);
                 return dashboard is null ? Results.NotFound() : Results.Ok(dashboard);
             })
             .WithName("GetDashboard")

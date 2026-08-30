@@ -34,8 +34,8 @@ public sealed class ReviewBulkTests : IDisposable
         var k1 = await Seed.KeyAsync(_harness, _appId, "a.one", "Course");
         var k2 = await Seed.KeyAsync(_harness, _appId, "b.two", "Course");
         var k3 = await Seed.KeyAsync(_harness, _appId, "c.three", "Course");
-        await Seed.StringAsync(_harness, k1.Id, "fr-FR", "un", ReviewState.NeedsReview);   // approve -> legal
-        await Seed.StringAsync(_harness, k2.Id, "fr-FR", "deux", ReviewState.NeedsReview); // approve -> legal
+        await Seed.StringAsync(_harness, k1.Id, "fr-FR", "un", ReviewState.InReview);   // approve -> legal
+        await Seed.StringAsync(_harness, k2.Id, "fr-FR", "deux", ReviewState.InReview); // approve -> legal
         await Seed.StringAsync(_harness, k3.Id, "fr-FR", "trois", ReviewState.Draft);      // approve -> illegal
 
         var result = await Service.ReviewBulkAsync(
@@ -51,14 +51,14 @@ public sealed class ReviewBulkTests : IDisposable
     public async Task Filters_by_language()
     {
         var key = await Seed.KeyAsync(_harness, _appId, "a.one", "Course");
-        await Seed.StringAsync(_harness, key.Id, "en-GB", "one", ReviewState.NeedsReview);
-        await Seed.StringAsync(_harness, key.Id, "fr-FR", "un", ReviewState.NeedsReview);
+        await Seed.StringAsync(_harness, key.Id, "en-GB", "one", ReviewState.InReview);
+        await Seed.StringAsync(_harness, key.Id, "fr-FR", "un", ReviewState.InReview);
 
         var result = await Service.ReviewBulkAsync(
             App, new ReviewBulkRequest("approve", Language: "fr-FR"), "lead");
 
         Assert.Equal(1, result.Transitioned);
-        Assert.Equal(ReviewState.NeedsReview, (await _harness.Strings.GetAsync(key.Id, "en-GB"))!.ReviewState);
+        Assert.Equal(ReviewState.InReview, (await _harness.Strings.GetAsync(key.Id, "en-GB"))!.ReviewState);
         Assert.Equal(ReviewState.Approved, (await _harness.Strings.GetAsync(key.Id, "fr-FR"))!.ReviewState);
     }
 
@@ -67,15 +67,15 @@ public sealed class ReviewBulkTests : IDisposable
     {
         var k1 = await Seed.KeyAsync(_harness, _appId, "a.one", "Course");
         var k2 = await Seed.KeyAsync(_harness, _appId, "b.two", "Course");
-        await Seed.StringAsync(_harness, k1.Id, "fr-FR", "un", ReviewState.NeedsReview);
-        await Seed.StringAsync(_harness, k2.Id, "fr-FR", "deux", ReviewState.NeedsReview);
+        await Seed.StringAsync(_harness, k1.Id, "fr-FR", "un", ReviewState.InReview);
+        await Seed.StringAsync(_harness, k2.Id, "fr-FR", "deux", ReviewState.InReview);
 
         var result = await Service.ReviewBulkAsync(
             App, new ReviewBulkRequest("approve", KeyIds: [k1.Id]), "lead");
 
         Assert.Equal(1, result.Transitioned);
         Assert.Equal(ReviewState.Approved, (await _harness.Strings.GetAsync(k1.Id, "fr-FR"))!.ReviewState);
-        Assert.Equal(ReviewState.NeedsReview, (await _harness.Strings.GetAsync(k2.Id, "fr-FR"))!.ReviewState);
+        Assert.Equal(ReviewState.InReview, (await _harness.Strings.GetAsync(k2.Id, "fr-FR"))!.ReviewState);
     }
 
     [Fact]

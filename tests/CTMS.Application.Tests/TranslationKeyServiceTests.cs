@@ -29,7 +29,7 @@ public sealed class TranslationKeyServiceTests : IDisposable
         Assert.Equal("Navigation", created.Category);
         Assert.Equal("alice", created.CreatedBy);
         Assert.True(created.Active);
-        Assert.Equal("acme-web", created.Application);
+        Assert.Equal("acme-web", created.Project);
     }
 
     [Fact]

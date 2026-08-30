@@ -1,14 +1,14 @@
 namespace CTMS.Application.Projects;
 
 /// <summary>
-/// Read model for an application. The <see cref="Code"/> (the slug) is the identifier used on
-/// the client delivery routes.
+/// Read model for a project. The <see cref="Code"/> (the slug) is the identifier used on the
+/// client delivery routes.
 /// </summary>
-public sealed record ApplicationDto(
+public sealed record ProjectDto(
     string Code,
     string Name,
     string? Description,
-    bool IsShared,
+    bool IsCommon,
     bool Active,
     string BaseLanguageCode,
     IReadOnlyList<string> EnabledLanguageCodes,
@@ -16,22 +16,22 @@ public sealed record ApplicationDto(
     DateTime UpdatedAt);
 
 /// <summary>
-/// Payload for creating an application. <see cref="Code"/> is derived from <see cref="Name"/>
+/// Payload for creating a project. <see cref="Code"/> is derived from <see cref="Name"/>
 /// when it is omitted.
 /// </summary>
-public sealed record CreateApplicationRequest(
+public sealed record CreateProjectRequest(
     string Name,
     string BaseLanguageCode,
     string? Code = null,
     string? Description = null,
-    bool IsShared = false,
+    bool IsCommon = false,
     IReadOnlyList<string>? EnabledLanguageCodes = null);
 
-/// <summary>Partial update for an application; omitted members are left unchanged.</summary>
-public sealed record UpdateApplicationRequest(
+/// <summary>Partial update for a project; omitted members are left unchanged.</summary>
+public sealed record UpdateProjectRequest(
     string? Name = null,
     string? Description = null,
-    bool? IsShared = null,
+    bool? IsCommon = null,
     bool? Active = null,
     string? BaseLanguageCode = null,
     IReadOnlyList<string>? EnabledLanguageCodes = null);

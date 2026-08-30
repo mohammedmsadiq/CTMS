@@ -2,7 +2,6 @@ using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
-using CTMS.Application.Webhooks;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
@@ -23,7 +22,6 @@ public sealed class TranslationStringService
     private readonly IProjectRepository _projects;
     private readonly IAuditRepository _audit;
     private readonly TranslationCacheInvalidator _invalidator;
-    private readonly IWebhookPublisher _webhooks;
     private readonly IUnitOfWork _unitOfWork;
 
     public TranslationStringService(
@@ -33,7 +31,6 @@ public sealed class TranslationStringService
         IProjectRepository projects,
         IAuditRepository audit,
         TranslationCacheInvalidator invalidator,
-        IWebhookPublisher webhooks,
         IUnitOfWork unitOfWork)
     {
         _strings = strings;
@@ -42,7 +39,6 @@ public sealed class TranslationStringService
         _projects = projects;
         _audit = audit;
         _invalidator = invalidator;
-        _webhooks = webhooks;
         _unitOfWork = unitOfWork;
     }
 
@@ -206,7 +202,7 @@ public sealed class TranslationStringService
 
         if (fromState == ReviewState.Published)
         {
-            // Published content just changed (and dropped back to NeedsReview) — drop the delivery cache.
+            // Published content just changed (and dropped back to InReview) — drop the delivery cache.
             await _invalidator.InvalidateAsync(project, [existing.LanguageCode], cancellationToken);
         }
 
@@ -259,11 +255,6 @@ public sealed class TranslationStringService
         {
             // A string entered or left Published — the assembled delivery map may have changed.
             await _invalidator.InvalidateAsync(project, [translationString.LanguageCode], cancellationToken);
-        }
-
-        if (target == ReviewState.Published)
-        {
-            _webhooks.Enqueue(project.Slug, [translationString.LanguageCode]);
         }
 
         return ToDto(translationString);
@@ -368,11 +359,6 @@ public sealed class TranslationStringService
         if (affectedLanguages.Count > 0)
         {
             await _invalidator.InvalidateAsync(project, affectedLanguages.ToList(), cancellationToken);
-
-            if (target == ReviewState.Published)
-            {
-                _webhooks.Enqueue(project.Slug, affectedLanguages.ToList());
-            }
         }
 
         return new ReviewBulkResult(transitioned, skipped);
@@ -406,13 +392,16 @@ public sealed class TranslationStringService
     private static (ReviewState Target, AuditAction Audit) ResolveReviewAction(string action) =>
         action?.Trim().ToLowerInvariant() switch
         {
-            "submit" => (ReviewState.NeedsReview, AuditAction.Submitted),
+            "submit" => (ReviewState.InReview, AuditAction.Submitted),
             "approve" => (ReviewState.Approved, AuditAction.Approved),
             "reject" => (ReviewState.Draft, AuditAction.Rejected),
-            "reopen" => (ReviewState.NeedsReview, AuditAction.Reopened),
+            "reopen" => (ReviewState.InReview, AuditAction.Reopened),
             "publish" => (ReviewState.Published, AuditAction.Published),
+            "archive" => (ReviewState.Archived, AuditAction.Archived),
+            "unarchive" => (ReviewState.Draft, AuditAction.Unarchived),
             _ => throw new ValidationException(
-                $"Unknown review action '{action}'. Expected 'submit', 'approve', 'reject', 'reopen' or 'publish'."),
+                $"Unknown review action '{action}'. Expected 'submit', 'approve', 'reject', " +
+                "'reopen', 'publish', 'archive' or 'unarchive'."),
         };
 
     private Task<Project?> ResolveApplicationAsync(string applicationCode, CancellationToken cancellationToken)

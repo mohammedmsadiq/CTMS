@@ -8,15 +8,15 @@ internal static class BulkReviewEndpoints
     public static IEndpointRouteBuilder MapBulkReviewEndpoints(this IEndpointRouteBuilder endpoints)
     {
         // Apply one review action across many strings at once. CanReview (admin/manager/reviewer).
-        endpoints.MapPost("/api/applications/{application}/review-bulk", async (
-                string application,
+        endpoints.MapPost("/api/projects/{project}/review-bulk", async (
+                string project,
                 ReviewBulkRequest request,
                 TranslationStringService strings,
                 HttpContext http,
                 CancellationToken cancellationToken) =>
             {
                 var reviewedBy = TokenActor.Resolve(http.User, request.ReviewedBy, request.ReviewedBy ?? "system");
-                var result = await strings.ReviewBulkAsync(application, request, reviewedBy, cancellationToken);
+                var result = await strings.ReviewBulkAsync(project, request, reviewedBy, cancellationToken);
                 return Results.Ok(result);
             })
             .WithName("ReviewTranslationStringsBulk")

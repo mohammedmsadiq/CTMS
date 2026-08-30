@@ -33,8 +33,8 @@ public sealed class ProjectRepository : IProjectRepository
     public Task<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken = default)
         => _projects.Find(p => p.Slug == slug).AnyAsync(cancellationToken);
 
-    public async Task<IReadOnlyList<Project>> ListSharedAsync(CancellationToken cancellationToken = default)
-        => await _projects.Find(p => p.IsShared && p.Active)
+    public async Task<IReadOnlyList<Project>> ListCommonAsync(CancellationToken cancellationToken = default)
+        => await _projects.Find(p => p.IsCommon && p.Active)
             .SortBy(p => p.Name)
             .ToListAsync(cancellationToken);
 

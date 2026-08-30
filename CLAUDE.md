@@ -1,339 +1,1895 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# Central Translation Management Service
 
-## Project
+## 1. Purpose
 
-CTMS — Centralised Translation Management System. A .NET 10 / C# backend service that stores
-translation strings for many **applications** and **languages**, runs them through a
-review/approval workflow, and serves **assembled-on-demand** published translations to client
-applications.
+This repository contains a Central Translation Management Service.
 
-## Commands
+The service is the **single source of truth for translations** across the organisation.
 
-All commands run from the repository root.
+It must support:
 
-- Build: `dotnet build CTMS.sln` (warnings are errors — the build must stay clean).
-- Run the API: `dotnet run --project src/CTMS.Api` (Swagger UI at `/swagger` in Development).
-- Test: `dotnet test`
-- Run a single test: `dotnet test --filter "FullyQualifiedName~PublishedTranslationsServiceTests"`
-  (or `--filter "DisplayName~fallback chain"`).
+- Mobile applications
+- Web applications
+- Websites
+- Backend microservices
+- Other services that require translated content
 
-### Persistence — MongoDB + Redis
+The organisation may have multiple applications and services, currently approximately:
 
-The store is **MongoDB** (`MongoDB.Driver`). Connection string key
-`ConnectionStrings:CtmsDatabase`; database name `Mongo:Database` (default `ctms`). Redis
-(`ConnectionStrings:Redis`) backs the delivery cache; when unset an in-process
-distributed-memory cache is used, so a local `dotnet run` needs no Redis. **There is no
-migration tool** — `MongoIndexInitializer` (an `IHostedService`) creates every index on
-startup; schema changes are additive and unknown-field-tolerant (`IgnoreExtraElements`). A
-one-off backfill command is written by hand when a rewrite is unavoidable. Indexes of note:
-`languages.code` (unique), `projects.slug` (unique), `translationKeys.(projectId, keyName)`
-(unique), `translationStrings.(translationKeyId, languageCode)` (unique), `apiKeys.hash`
-(unique). The `webhooks` collection is tiny and unindexed.
+- 4 major applications/sites
+- Multiple backend microservices
+- Approximately 20 languages
 
-## Architecture
+The number of applications, services and languages must NOT be hard-coded.
 
-Four projects under `src/`, plus tests under `tests/`. Dependencies point inward:
+The system must be designed so additional applications, services and languages can be added without changing the architecture.
 
+---
+
+# 2. Most Important Architectural Requirement
+
+There are TWO ways the translation functionality will be consumed.
+
+## Internal .NET Microservices
+
+Internal .NET microservices that exist in the same solution should use the shared Translation Application/Library directly.
+
+They should NOT make an HTTP request to the Translation API simply to obtain translations.
+
+Example:
+
+```text
+Course Microservice
+        │
+        ▼
+ITranslationService
+        │
+        ▼
+Translation Application
+        │
+        ├── Redis
+        │
+        └── MongoDB
 ```
-CTMS.Api  ──►  CTMS.Application  ──►  CTMS.Domain
-   │                                     ▲
-   └────►  CTMS.Infrastructure  ─────────┘   (also ──► CTMS.Application)
+
+The internal microservice uses the translation functionality directly through dependency injection/shared code.
+
+---
+
+## External Applications and Websites
+
+External applications and websites must consume translations through the Translation REST API.
+
+Examples:
+
+- .NET MAUI applications
+- Websites
+- React applications
+- Angular applications
+- External web applications
+- Other externally deployed applications
+- External services
+
+Example:
+
+```text
+MAUI / Website
+       │
+       ▼
+Translation REST API
+       │
+       ▼
+Translation Application
+       │
+       ├── Redis
+       │
+       └── MongoDB
 ```
 
-- **CTMS.Domain** — entities and domain logic. No framework dependencies. Entities derive from
-  `Entity` (Guid `Id`, `CreatedAt`, `UpdatedAt`); constructors/methods guard invariants and
-  setters are private. `AuditEntry` is append-only (only `Id` + `Timestamp`).
-  `[InternalsVisibleTo("CTMS.Infrastructure")]` lets the persistence layer stamp timestamps.
-- **CTMS.Application** — use-case orchestration (`ProjectService`, `LanguageService`,
-  `TranslationKeyService`, `TranslationStringService`, `PublishedTranslationsService`,
-  `TranslationImportService`, `AuditService`), DTOs, and the ports it needs
-  (`IProjectRepository`, `ILanguageRepository`,
-  `ITranslationKeyRepository`, `ITranslationStringRepository`, `IAuditRepository`,
-  `IPublishedTranslationsCache`, `IUnitOfWork`). DTOs — never entities — cross the API
-  boundary. `AddApplication()` registers the services.
-- **CTMS.Infrastructure** — MongoDB. `CtmsMongoContext` with one collection per aggregate,
-  repository implementations under `Persistence/Repositories`, `PublishedTranslationsCache`
-  over `IDistributedCache` under `Persistence/Caching`, and the `MongoIndexInitializer` /
-  `DataSeeder` hosted services. `AddInfrastructure(IConfiguration)` wires the Mongo client,
-  the (no-op) unit of work, the repositories, the readiness health check, and the cache.
-- **CTMS.Api** — ASP.NET Core minimal-API host. Composition root only. Endpoints are grouped
-  per resource under `Endpoints/`; errors become RFC 7807 ProblemDetails via
-  `ApplicationExceptionHandler`. Entra ID JWT bearer + role/policy authorization, with the
-  `Auth:Enabled=false` dev bypass and the `Auth:PublicBundleReads` anonymous-delivery path.
+---
 
-### Data model
+# 3. One Translation Engine
 
-- **`Language`** (global, collection `languages`, unique index `code`) — `Code` (BCP-47,
-  unique, e.g. `en-GB`), `Name`, `FallbackCode?` (another language code — `fr-CA` → `fr-FR` →
-  `en-GB`), `IsRtl`, `Active`.
-- **`Project`** = an *application* (collection `projects`, unique index `slug`) — `Name`,
-  `Slug` (the application **code** used on client routes), `Description?`, `BaseLanguageCode`,
-  `IsShared` (a shared app like `common` whose published translations merge into every app's
-  bundle), `Active`, `EnabledLanguageCodes` (`IReadOnlyList<string>`; add/remove validate the
-  language exists and is active).
-- **`TranslationKey`** (collection `translationKeys`, unique `(projectId, keyName)`,
-  non-unique `(projectId, category)`) — `KeyName` (dotted path, `[A-Za-z0-9_.-]+`), `Category`
-  (the domain always stores a non-blank value — `Common`, `Navigation`, `Course`, …),
-  `Description?`, `Active`, `CreatedBy`. **`category` is optional on the create API**: when it is
-  null/blank the service derives one from the key-name prefix via
-  `CategorySuggestion.FromKeyName` — the segment before the first `.` title-cased
-  (`course.start` → `Course`, `nav.home.link` → `Nav`), or `General` when the key has no `.`.
-  `PATCH` still sets `category` explicitly and rejects an explicitly-blank value.
-- **`TranslationString`** (collection `translationStrings`, unique
-  `(translationKeyId, languageCode)`, plus `(translationKeyId, reviewState, updatedAt desc)`) —
-  `LanguageCode` (string), `Value`, `ReviewState` (`Draft` / `NeedsReview` / `Approved` /
-  `Published`, stored as text), `UpdatedBy`. **Last write wins** — there is no version token.
-- **`AuditEntry`** (collection `auditEntries`, `(projectId, timestamp)` +
-  `(entityType, entityId, timestamp)`) — append-only; `Action`, `Actor`, `Timestamp`,
-  `FromState?`, `ToState?`, `Detail?`, and value diffs `OldValue?` / `NewValue?` (`NewValue`
-  on `Created`; both on `Edited`; null on review transitions).
-- **`ApiKey`** (collection `apiKeys`, unique index `hash`) — a read-only machine credential.
-  `Name`, `Hash` (Base64 SHA-256 of the raw key — the raw key is **never** stored), `Prefix`
-  (first 8 chars of the raw key, for display), `CreatedBy`, `Active`, `LastUsedAt?`. Raw key
-  format `ctms_<40 URL-safe base64 chars>` from a CSPRNG (`ApiKeySecret`); shown once, at
-  creation.
-- **`Webhook`** (collection `webhooks`, no index) — a publish-notification endpoint. `Url`
-  (absolute http/https), `Secret` (HMAC signing key, shown once), `Active`, `Events`
-  (`IReadOnlyList<string>`; only `["published"]` fires today), `CreatedBy`.
+There must NOT be two separate translation implementations.
 
-There are **no versioned bundles** — `TranslationBundle` and `TranslationString.Version` were
-removed. Published translations are assembled on demand (see below).
+Both internal and external consumers must use the same underlying translation logic.
 
-### Assemble-on-demand published translations
+Architecture:
 
-`PublishedTranslationsService.GetPublishedAsync(applicationCode, languageCode)`:
+```text
+                         Translation System
+                                │
+                         Translation Engine
+                                │
+                ┌───────────────┴───────────────┐
+                │                               │
+                ▼                               ▼
+       Internal .NET Services             REST API
+                │                               │
+                ▼                               ▼
+        Direct Application Call          External Clients
+                │                               │
+                ▼                               ▼
+          Microservices                   MAUI / Web
+```
 
-1. resolve the application (404 unknown/inactive) and language (404 unknown/inactive, or not
-   in the application's `EnabledLanguageCodes`);
-2. gather `TranslationString`s with `ReviewState == Published` for **this application's** keys
-   plus **every `IsShared` application's** keys. On a key-name collision the **app-specific
-   value wins** over a shared one;
-3. for keys still missing a published value in `languageCode`, walk the `FallbackCode` chain
-   (`fr-CA` → `fr-FR` → `en-GB`, cycle-guarded) and take the first published value found; a
-   key with no published value anywhere is omitted;
-4. return a flat `Dictionary<string,string>` (`keyName` → `value`), ordered by key.
+The Translation API is an adapter around the same application layer used by internal services.
 
-**Content hash / ETag** — `TranslationContentHash.Compute`: lowercase-hex SHA-256 over the
-ordered entries, each emitted as `key\nvalue\n`. No version number anywhere.
+Do not duplicate translation resolution logic inside controllers.
 
-**Redis cache** — key `translations:{applicationCode}:{languageCode}` (both lower-cased),
-holding the serialized map + its hash. Read-through; in-memory `IDistributedCache` fallback
-when `ConnectionStrings:Redis` is unset. Invalidated by `TranslationCacheInvalidator` on
-bulk publish and on any per-string review transition that enters or leaves `Published` (or an
-edit that knocks a `Published` string back). **Invalidating a shared application fans out
-across every application's cache** for the affected languages.
+---
 
-### API surface
+# 4. MongoDB Ownership
 
-Base: `/api`. Each `/api/*` group carries a named authorization policy. `GET /health`,
-`GET /health/ready` and `/swagger` are anonymous. The **client delivery reads** are anonymous
-while `Auth:PublicBundleReads` is `true` (default) and require `CanRead` otherwise.
+MongoDB is the **single source of truth** for translations.
 
-Known exceptions → RFC 7807: `ValidationException`→400, `NotFoundException`→404,
-`SlugAlreadyInUseException`/`ConflictException`/`InvalidReviewTransitionException`→409.
+Only the Translation system should access the translation MongoDB collections.
 
-Request bodies are capped at `Limits:MaxRequestBodyBytes` (default 256&nbsp;KB) — over-cap
-requests get `413` before binding. The bulk-import endpoint opts in (via endpoint metadata) to a
-higher ceiling, `Limits:MaxImportBodyBytes` (default 5&nbsp;MB).
+Internal microservices must NOT directly query MongoDB translation collections.
 
-**Client delivery** (anonymous by default)
+Do NOT create:
 
-- `GET /api/translations/{application}/{language}` → `{ application, language, translations }`.
-  Sets `ETag: "<hash>"` and `Cache-Control: no-cache`; honours `If-None-Match` → `304`.
-  `404` unknown/inactive application or language, or language not enabled for the app.
-- `GET /api/languages?includeInactive=` → `LanguageDto[]` (active only by default).
-- `GET /api/applications?includeInactive=` → `ApplicationDto[]` (active only by default).
+```text
+Course Microservice
+      ↓
+MongoDB Translation Collection
+```
 
-**Languages** — `GET /api/languages/{code}` (`CanRead`); `POST /api/languages`,
-`PATCH /api/languages/{code}` (`CanManageContent`).
+Instead:
 
-- `GET /api/languages/suggestions` → `LanguageSuggestionDto[]` (`{ code, name, isRtl }`) — a
-  **static** ~40-entry BCP-47 catalogue (`LanguageCatalogue`, never persisted). Anonymous while
-  `Auth:PublicBundleReads` is true, `CanRead` otherwise.
-- `POST /api/languages/bulk` (`CanManageContent`) — body
-  `{ languages: [{ code, name, fallbackCode?, isRtl? }] }` → `{ created: [...codes], skipped:
-  [...codes] }`. Idempotent: existing codes are skipped, not errored; a blank code/name in an
-  entry is `400`.
+```text
+Course Microservice
+      ↓
+Translation Application
+      ↓
+MongoDB
+```
 
-**Applications** — `GET /api/applications/{code}` (`CanRead`); `POST /api/applications`
-(`CanAdminProjects`); `PATCH /api/applications/{code}`,
-`PUT|DELETE /api/applications/{code}/languages/{language}` (`CanManageContent`).
-`ApplicationDto { code, name, description?, isShared, active, baseLanguageCode, enabledLanguageCodes }`.
+External applications:
 
-**Translation keys** (nested, `CanRead` / `CanManageContent`)
+```text
+Website
+   ↓
+Translation API
+   ↓
+Translation Application
+   ↓
+MongoDB
+```
 
-- `GET /api/applications/{application}/keys?category=&skip=&take=` → `PagedResult<TranslationKeyDto>`
-- `GET|POST /api/applications/{application}/keys[/{keyId:guid}]`,
-  `PATCH|DELETE .../keys/{keyId:guid}`. Create/Update carry `category`.
+This ensures the Translation system owns:
 
-**Translation strings** (nested)
+- Translation storage
+- Translation resolution
+- Common translations
+- Project translations
+- Language fallback
+- Publishing
+- Translation status
+- Translation history
+- Cache management
 
-- `GET .../keys/{keyId:guid}/strings` and `GET .../keys/{keyId:guid}/strings/{language}` (`CanRead`)
-- `PUT .../keys/{keyId:guid}/strings/{language}` — upsert (`CanEditStrings`); `201` created /
-  `200` updated. Editing a non-`Draft` string resets it to `NeedsReview`. Last write wins.
-- `GET /api/applications/{application}/strings?reviewState=&skip=&take=` →
-  `PagedResult<TranslationStringDto>` (`CanRead`).
-- `POST .../keys/{keyId:guid}/strings/{language}/review` — `{ action, reviewedBy }`,
-  `action` ∈ `submit|approve|reject|reopen|publish` (`CanReview`). Transition table unchanged.
+---
 
-**Management translations** (`CanRead`, except publish `CanPublish`)
+# 5. Redis Ownership
 
-- `GET /api/translations?application=&category=&language=&search=&status=&skip=&take=` →
-  `PagedResult<TranslationRowDto>`. `TranslationRowDto { keyId, key, category, description?,
-  values: { "<lang>": { value, status, source }, … } }` — one row per key, a cell per enabled
-  language; missing languages absent from `values`. `search` matches key name OR any value
-  (case-insensitive substring). `status` (optional, one of the four `ReviewState` names; `400`
-  if invalid) keeps only rows with **≥1 cell** in that state, but each kept row still carries
-  **all** its cells so the grid stays coherent. `source` is `"app"` when the value is the
-  application's own string, or `"shared:<code>"` when it comes from a shared application whose
-  keys are merged into a single-application grid (app-owned keys win a name collision). Client
-  delivery is unaffected — `source` is grid-only.
-- `GET /api/categories?application=` → distinct non-empty categories (`string[]`).
-- `GET /api/dashboard?application=` → `{ applicationCount, languageCount, keyCount,
-  coverage: [ { languageCode, languageName, translatedCount, totalKeys, percent, missingCount } ],
-  totalMissing }`. **"Translated" = a `TranslationString` exists in any non-`Draft` state.**
-- `GET /api/translations/missing?application=&language=&skip=&take=` →
-  `PagedResult<MissingTranslationDto>` = `{ keyId, key, category, missingLanguages: [...] }`
-  (keys with no non-`Draft` value in a target language).
-- `POST /api/translations/publish` — `{ application, language? }` → `{ published: <count> }`;
-  every `Approved` string for the application (and language, if given) → `Published`, audit
-  entries written, cache invalidated (shared-app fan-out).
-- `GET /api/translations/publish/preview?application=&language=` (`CanRead`) →
-  `{ application, language, changes: [ { key, currentValue?, newValue, kind } ], addedCount,
-  changedCount }` — what a `publish` for the same args would change in the delivered map, by
-  assembling the current published map and the hypothetical one (the app's `Approved` strings
-  treated as published) and diffing. `kind` is `"added"` (key not currently delivered) or
-  `"changed"` (delivered value differs — reached today only via the fallback chain). `language`
-  is **required** (`400` otherwise); `404` for an unknown/inactive/not-enabled target.
+Redis is a cache.
 
-**Bulk import**
+MongoDB remains the source of truth.
 
-- `POST /api/applications/{application}/import` (`CanManageContent`) — body
-  `{ format, language, content, category?, status?, dryRun? }`. `format` ∈ `json` (flat or
-  nested object, flattened with `.`) / `flat` (`key=value` lines; `#` comments and blank lines
-  ignored) / `csv` (header row naming `key` and `value` columns; RFC-4180 quoting) / `resx`
-  (`<data name><value>` elements; comments/`<resheader>`/`xml:space`/typed resources ignored).
-  `language` must be enabled for the application (`404` otherwise). Each parsed `(key, value)`
-  creates the `TranslationKey` if missing (category = request `category`, else derived per the
-  key rule above; `createdBy` from the token) and upserts the `TranslationString` for
-  `(key, language)` at `status` (`Draft` default; `NeedsReview` / `Approved` accepted;
-  `Published` → `400`). `dryRun: true` computes the plan and writes nothing. Response
-  `{ createdKeys, createdStrings, updatedStrings, skipped, errors: [{ line?, key?, message }],
-  keys: [ …first 200 key names ] }`. A body malformed for its `format` → `400` naming the
-  line. Parsers live in `CTMS.Application/Translations/Import` and are HTTP-free.
+Only the Translation system should manage translation Redis entries.
 
-**Bulk review**
+Internal microservices should NOT independently manipulate translation cache keys.
 
-- `POST /api/applications/{application}/review-bulk` (`CanReview`) — body
-  `{ action, language?, category?, keyIds?, reviewedBy? }`; `action` ∈
-  `submit|approve|reject|reopen|publish`. Applies the transition to every string of the
-  application matching the optional filters that is **legal** from its current state — illegal
-  ones are **skipped**, not errored. Writes one audit entry per transitioned string and
-  invalidates the cache once at the end (shared-app fan-out for strings entering/leaving
-  `Published`). Response `{ transitioned, skipped }`. **At least one of `language` / `category`
-  / `keyIds` is required** (`400` otherwise) so an unfiltered mass-approve is not one click.
+External applications should NOT access Redis.
 
-**History** (`CanRead`) — `GET /api/applications/{application}/history?skip=&take=` →
-`PagedResult<AuditEntryDto>`; `GET /api/applications/{application}/keys/{keyId:guid}/strings/{language}/history`
-→ `AuditEntryDto[]`. `AuditEntryDto` carries `oldValue` / `newValue`, and its owning-application
-id field is **`applicationId`** (the internal `Project` / `ProjectId` names are unchanged).
+Architecture:
 
-**API keys** (`CanAdminProjects`) — machine credentials for authenticated read-only clients.
+```text
+                  Translation Application
+                           │
+                    ┌──────┴──────┐
+                    │             │
+                    ▼             ▼
+                MongoDB         Redis
+               Source of       Cache
+                 Truth
+```
 
-- `POST /api/api-keys` — body `{ name }` → `201`
-  `{ id, name, prefix, createdBy, active, createdAt, key }`. **`key` (the raw value) is
-  returned only here, once.**
-- `GET /api/api-keys` → `ApiKeyDto[]` (`{ id, name, prefix, createdBy, active, lastUsedAt?,
-  createdAt }` — no hash, no raw key).
-- `DELETE /api/api-keys/{id:guid}` → `204` / `404`. **Hard delete.**
+---
 
-**Webhooks** (`CanAdminProjects`) — publish-notification registrations.
+# 6. Existing Solution Must Be Inspected First
 
-- `POST /api/webhooks` — body `{ url, secret?, events? }` (`url` absolute http/https; a random
-  `secret` is generated when omitted; `events` defaults to `["published"]`) → `201`
-  `{ id, url, active, events, createdBy, createdAt, secret }`. **`secret` is returned only
-  here, once.** A non-http(s) `url` ⇒ `400`.
-- `GET /api/webhooks` → `WebhookDto[]` (`{ id, url, active, events, createdBy, createdAt }` —
-  no secret).
-- `DELETE /api/webhooks/{id:guid}` → `204` / `404`. Hard delete.
+This is an existing solution.
 
-**Health** — `GET /health` (liveness), `GET /health/ready` (Mongo `ping`, tag `ready`).
+Before making changes, inspect the entire repository.
 
-### Review workflow
+Do NOT immediately create a new implementation.
 
-`POST .../strings/{language}/review` `{ action, reviewedBy }`. Transitions on
-`TranslationString.ChangeReviewState`:
+Understand:
 
-| action  | from        | to          |
-|---------|-------------|-------------|
-| submit  | Draft       | NeedsReview |
-| approve | NeedsReview | Approved    |
-| reject  | NeedsReview | Draft       |
-| reopen  | Approved / Published | NeedsReview |
-| publish | Approved    | Published   |
+- Existing solution structure
+- Existing projects
+- Existing microservices
+- Existing APIs
+- Existing translation implementation
+- Existing MongoDB implementation
+- Existing repositories
+- Existing services
+- Existing models
+- Existing DTOs
+- Existing authentication
+- Existing authorisation
+- Existing caching
+- Existing Redis implementation
+- Existing configuration
+- Existing tests
+- Existing Docker configuration
+- Existing Azure infrastructure
+- Existing Azure DevOps pipelines
+- Existing NuGet packages
 
-Any other pair throws `InvalidReviewTransitionException` (409). Editing a stored string resets
-`ReviewState` to `NeedsReview` unless it is `Draft`.
+Look for:
 
-### Publish webhooks
+- Duplicate functionality
+- Dead code
+- Unused classes
+- Unused interfaces
+- Unused projects
+- Unused NuGet packages
+- Obsolete translation models
+- Duplicate translation storage
+- Duplicate translation logic
+- Unused configuration
+- Unused endpoints
+- Old database collections
+- Old translation systems
 
-When translations are published — the bulk `POST /api/translations/publish`, a
-`POST /api/applications/{app}/review-bulk` with `action=publish`, or a per-string `review`
-`publish` — each publish path calls `IWebhookPublisher.Enqueue(applicationCode, languages)`
-(the ports live in `CTMS.Application/Webhooks`; enqueue happens *after* the cache invalidation).
-`ChannelWebhookPublisher` drops one `WebhookDelivery` per affected language onto a **bounded
-`Channel`** (drop-oldest when full) and returns immediately — a webhook never blocks or fails a
-publish. `WebhookDispatchService` (a `BackgroundService`, `CTMS.Api/Webhooks`) drains the
-channel: for each `(application, language)` it loads the active webhooks, asks
-`PublishedTranslationsService.GetPublishedAsync` for the **current delivery hash** (empty +
-logged if that lookup returns nothing / throws), builds the body once and POSTs it to every
-webhook subscribed to `published`.
+Do not preserve code simply because it already exists.
 
-Delivery body (`application/json`, property order fixed so the signature is reproducible):
+---
+
+# 7. Assessment Before Implementation
+
+Before making major architectural changes, create:
+
+```text
+docs/existing-solution-assessment.md
+```
+
+Include:
+
+```text
+Existing Architecture
+Existing Microservices
+Existing Translation Architecture
+Existing Database Architecture
+Existing API Architecture
+Existing Redis Architecture
+Existing Authentication
+Existing Pipelines
+Existing Tests
+Existing Dependencies
+Unused Code Candidates
+Duplicate Functionality
+Obsolete Data
+Recommended Changes
+Recommended Removals
+Migration Risks
+```
+
+The assessment should be based on the actual repository.
+
+Do not guess.
+
+---
+
+# 8. Do Not Blindly Rebuild
+
+This is a refactoring and enhancement task.
+
+If existing code already performs part of the required functionality correctly:
+
+- Reuse it
+- Refactor it
+- Move it
+- Simplify it
+
+Do NOT create a duplicate implementation.
+
+For example, if an existing translation resolver already exists:
+
+```text
+Existing TranslationResolver
+```
+
+do not create:
+
+```text
+NewTranslationResolver
+```
+
+unless there is a clear technical reason.
+
+---
+
+# 9. Target Solution Structure
+
+The final solution should follow a clean architecture similar to:
+
+```text
+src/
+│
+├── Translation.Api
+│
+├── Translation.Application
+│
+├── Translation.Domain
+│
+├── Translation.Infrastructure
+│
+├── Translation.Contracts
+│
+├── Translation.Admin
+│
+└── Translation.Client
+│
+tests/
+│
+├── Translation.UnitTests
+├── Translation.IntegrationTests
+└── Translation.ApiTests
+│
+infra/
+│
+├── docker
+└── azure
+│
+pipelines/
+│
+└── templates
+│
+docs/
+```
+
+However, do not force this structure if the existing solution has a better established architecture.
+
+The final dependency direction must remain clean.
+
+---
+
+# 10. Domain Layer
+
+The Domain layer must contain translation business concepts and rules.
+
+Potential entities:
+
+```text
+Application / Project
+Language
+TranslationKey
+Translation
+TranslationHistory
+```
+
+Do not create entities that are not required.
+
+---
+
+# 11. Application Layer
+
+The Application layer contains translation business logic.
+
+This is the most important reusable layer.
+
+It must contain functionality such as:
+
+```text
+GetTranslations
+ResolveTranslations
+ResolveFallback
+ResolveCommonTranslations
+ResolveProjectTranslations
+PublishTranslation
+UpdateTranslation
+CreateTranslation
+ReviewTranslation
+ApproveTranslation
+```
+
+The application layer must NOT depend on ASP.NET controllers.
+
+It must NOT depend on HTTP.
+
+It must NOT require a web request to operate.
+
+This is what allows internal microservices to use it directly.
+
+---
+
+# 12. Shared Translation Service
+
+Create a reusable abstraction such as:
+
+```csharp
+public interface ITranslationService
+{
+    Task<TranslationBundle> GetTranslationsAsync(
+        string project,
+        string language,
+        CancellationToken cancellationToken = default);
+}
+```
+
+The exact naming may differ depending on the existing architecture.
+
+The important requirement is that internal .NET microservices can inject the service:
+
+```csharp
+public class CourseService
+{
+    private readonly ITranslationService _translationService;
+
+    public CourseService(
+        ITranslationService translationService)
+    {
+        _translationService = translationService;
+    }
+}
+```
+
+and call:
+
+```csharp
+var translations =
+    await _translationService.GetTranslationsAsync(
+        "icoach",
+        "fr-FR",
+        cancellationToken);
+```
+
+There should be NO HTTP request involved.
+
+---
+
+# 13. Dependency Injection
+
+Provide a reusable registration method for internal .NET consumers.
+
+For example:
+
+```csharp
+services.AddTranslationServices(configuration);
+```
+
+The exact implementation should follow the existing solution conventions.
+
+It should register:
+
+- Translation application services
+- Translation repositories
+- MongoDB
+- Redis
+- Translation resolution
+- Required infrastructure
+
+Internal microservices should be able to reference the shared translation project/library and register it cleanly.
+
+---
+
+# 14. Internal Microservice Consumption
+
+Internal .NET microservices must consume the translation functionality directly.
+
+Example:
+
+```text
+Course Service
+      │
+      ▼
+ITranslationService
+      │
+      ▼
+Translation Application
+      │
+      ├── Translation Repository
+      │
+      ├── Redis Cache
+      │
+      └── MongoDB
+```
+
+Do NOT implement:
+
+```text
+Course Service
+      │
+      ▼
+HTTP Client
+      │
+      ▼
+Translation API
+```
+
+when the Course Service can directly use the shared application/library.
+
+This avoids unnecessary:
+
+- HTTP overhead
+- Network dependencies
+- Serialisation
+- Deserialisation
+- Service-to-service traffic
+- Failure points
+
+---
+
+# 15. Important Microservice Boundary
+
+The fact that the projects are in the same solution does NOT mean every project should access everything.
+
+The Translation system owns the translation domain.
+
+Internal microservices may use the Translation Application through its public abstraction.
+
+They must not bypass the Translation Application and directly access:
+
+```text
+MongoDB
+Translation collections
+Redis
+Translation repositories
+Internal persistence models
+```
+
+Use the public application/service interface.
+
+---
+
+# 16. External API
+
+The Translation API exposes the translation functionality to external consumers.
+
+Primary endpoint:
+
+```http
+GET /api/translations/{project}/{language}
+```
+
+Example:
+
+```http
+GET /api/translations/icoach/fr-FR
+```
+
+The API controller should:
+
+1. Validate request
+2. Call ITranslationService
+3. Handle ETag/HTTP caching where appropriate
+4. Return the translation bundle
+
+The controller must not contain translation business logic.
+
+---
+
+# 17. External Consumers
+
+External consumers include:
+
+```text
+MAUI Applications
+Websites
+Web Applications
+JavaScript Applications
+React
+Angular
+Other Services
+External Microservices
+```
+
+They use:
+
+```http
+GET /api/translations/{project}/{language}
+```
+
+The technology of the consuming client must not matter.
+
+The API contract must remain platform independent.
+
+---
+
+# 18. Translation Payload
+
+The service must return Common + Project translations in ONE payload.
+
+Example:
 
 ```json
-{ "event": "published", "application": "<code>", "language": "<code>",
-  "etag": "<current delivery hash>", "publishedAt": "<iso8601>" }
+{
+  "project": "icoach",
+  "language": "fr-FR",
+  "translations": {
+    "common.save": "Enregistrer",
+    "common.cancel": "Annuler",
+    "common.delete": "Supprimer",
+    "course.start": "Commencer le cours",
+    "course.complete": "Cours terminé",
+    "course.progress": "Progression"
+  }
+}
 ```
 
-Header `X-CTMS-Signature: sha256=<lowercase-hex HMAC-SHA256(secret, rawBody)>`
-(`WebhookSignature.Compute`). `WebhookSender` retries a non-2xx or a timeout up to
-`Webhooks:MaxAttempts` times (`Webhooks:RetryBackoff`, default 1s then 3s); after that it logs a
-warning with the webhook id + status and gives up.
+Consumers should NOT have to make separate requests for:
 
-Config (`Webhooks` section): `Webhooks:Enabled` (default `true` — when `false`,
-`NoOpWebhookPublisher` is registered and nothing is enqueued or dispatched),
-`Webhooks:TimeoutSeconds` (default `5`), `Webhooks:MaxAttempts` (default `3`).
+```text
+Common
+```
 
-### Auth
+and:
 
-Five Entra app roles (`ctms.admin/manager/reviewer/translator/reader`) → six policies
-(`CanRead`, `CanEditStrings`, `CanReview`, `CanManageContent`, `CanPublish`,
-`CanAdminProjects`) in `src/CTMS.Api/Auth/AuthorizationPolicies.cs` (mirrored in
-`CTMS.AdminUI/Auth`). `updatedBy` / `reviewedBy` body fields are overridden with the token
-identity when a real bearer token is present (`TokenActor`).
+```text
+Project
+```
 
-**API-key scheme (`X-Api-Key`).** When `Auth:Enabled=true`, `AuthenticationSetup` registers the
-`ApiKey` scheme (`ApiKeyAuthenticationHandler`) *alongside* JWT `Bearer`, and makes a
-`CtmsCombined` **policy scheme** the default: its `ForwardDefaultSelector` routes to `ApiKey`
-when the request carries an `X-Api-Key` header, otherwise to `Bearer`. Every CTMS policy is
-satisfied by **either** a valid bearer token **or** a valid `X-Api-Key`. The handler hashes the
-header value (Base64 SHA-256), looks it up via `IApiKeyRepository.FindByHashAsync`, and on an
-active match issues a principal holding the **single** role `ctms.reader` — an API key can only
-ever read; a write route it reaches answers `403`. Its `AuthenticationType` (`CtmsApiKey`) is
-distinct from JWT and the dev bypass, and it has no personal identity. No / unknown / inactive
-key ⇒ `AuthenticateResult.NoResult()` (never `Fail`) so a bearer token on the same request
-still gets its turn. `LastUsedAt` is stamped fire-and-forget (failure swallowed). When
-`Auth:Enabled=false` the dev-bypass all-roles principal still wins and **no** `ApiKey` scheme is
-added. The anonymous client-delivery routes are unaffected either way.
+The Translation Service performs the combination.
 
-### Tests
+---
 
-- `tests/CTMS.Application.Tests` (xUnit) — application services against a real `CtmsMongoContext`
-  on **EphemeralMongo** (in-process `mongod`, shared via the `"mongo"` collection). Each class
-  builds a `CtmsTestHarness`; `Infrastructure/Seed.cs` has direct-to-repo arrange helpers.
-- `tests/CTMS.Api.IntegrationTests` — the HTTP surface through `WebApplicationFactory` over the
-  real `Program`; `MongoFixture` prefers `Testcontainers.MongoDb` (`mongo:7`) and falls back to
-  EphemeralMongo. `Support/ApiHelpers.cs` has request helpers.
+# 19. Common Translations
+
+There must be a Common translation scope shared between projects.
+
+Examples:
+
+```text
+common.save
+common.cancel
+common.delete
+common.close
+common.back
+common.next
+common.previous
+common.loading
+common.error
+common.retry
+common.yes
+common.no
+```
+
+Common translations are reusable by multiple projects.
+
+Do not duplicate Common translations into every project.
+
+---
+
+# 20. Project Translations
+
+Each project/application may have project-specific translations.
+
+Examples:
+
+```text
+icoach
+website
+customerportal
+adminportal
+```
+
+Example:
+
+```text
+icoach:
+    course.start
+    course.complete
+    course.progress
+
+website:
+    home.title
+    home.subtitle
+
+customerportal:
+    account.subscription
+    account.billing
+```
+
+---
+
+# 21. Common + Project Resolution
+
+For:
+
+```text
+project = icoach
+language = fr-FR
+```
+
+resolve:
+
+```text
+Common/fr-FR
++
+iCoach/fr-FR
+```
+
+into:
+
+```text
+TranslationBundle
+```
+
+The consuming client receives only the final resolved bundle.
+
+---
+
+# 22. Project Overrides
+
+If the architecture supports project-specific overrides, the resolution priority should be:
+
+```text
+Project
+   ↓
+Common
+   ↓
+Language Fallback
+```
+
+Example:
+
+Common:
+
+```text
+common.cancel = Cancel
+```
+
+Project:
+
+```text
+common.cancel = Exit Course
+```
+
+Result:
+
+```text
+common.cancel = Exit Course
+```
+
+Do not introduce this functionality unnecessarily if the existing requirements do not require it.
+
+---
+
+# 23. Languages
+
+Languages must be data driven.
+
+Do NOT hard-code 20 languages.
+
+Examples:
+
+```text
+en-GB
+fr-FR
+de-DE
+es-ES
+it-IT
+pt-PT
+nl-NL
+ar-AE
+```
+
+Additional languages must be addable without code changes.
+
+---
+
+# 24. Language Fallback
+
+Support configurable language fallback.
+
+Example:
+
+```text
+fr-CA
+   ↓
+fr-FR
+   ↓
+en-GB
+```
+
+When resolving a translation:
+
+1. Try requested language
+2. Try configured fallback
+3. Continue fallback
+4. Use default language
+
+Do not return an empty translation when a valid fallback exists.
+
+---
+
+# 25. Translation Status
+
+Translations must have a lifecycle:
+
+```text
+Draft
+InReview
+Approved
+Published
+Archived
+```
+
+Only:
+
+```text
+Published
+```
+
+translations are returned to consuming applications and services.
+
+Internal microservices and external applications must not accidentally receive Draft or InReview translations.
+
+---
+
+# 26. Translation History
+
+Keep an audit history of translation changes.
+
+History should include:
+
+```text
+Translation key
+Project
+Language
+Old value
+New value
+Action
+Changed by
+Changed at
+```
+
+History is for:
+
+- Auditing
+- Tracking changes
+- Investigation
+- Rollback support
+
+History is NOT numeric translation versioning.
+
+---
+
+# 27. No Numeric Translation Versioning
+
+Do NOT create:
+
+```text
+Version 1
+Version 2
+Version 3
+```
+
+for every translation.
+
+If:
+
+```text
+course.start = Start Course
+```
+
+changes to:
+
+```text
+course.start = Begin Course
+```
+
+the key remains:
+
+```text
+course.start
+```
+
+Use:
+
+```text
+UpdatedAt
+ContentHash
+ETag
+```
+
+for change detection.
+
+---
+
+# 28. ETag
+
+Translation bundles must support ETags.
+
+Example:
+
+```http
+GET /api/translations/icoach/fr-FR
+
+ETag: "abc123"
+```
+
+The client can send:
+
+```http
+If-None-Match: "abc123"
+```
+
+If the bundle has not changed:
+
+```http
+304 Not Modified
+```
+
+If it has changed:
+
+```http
+200 OK
+ETag: "xyz789"
+```
+
+The ETag must represent the complete resolved bundle.
+
+It must change when:
+
+- A Common translation changes
+- A Project translation changes
+- A fallback translation changes
+- A published translation is added
+- A published translation is removed
+
+---
+
+# 29. Redis Cache
+
+Cache the final resolved translation bundle.
+
+Recommended cache key:
+
+```text
+translations:{project}:{language}
+```
+
+Example:
+
+```text
+translations:icoach:fr-FR
+```
+
+The cached value should already contain:
+
+```text
+Common
++
+Project
++
+Fallback resolution
+```
+
+Consumers should not perform this combination.
+
+---
+
+# 30. Cache Invalidation
+
+When a Project translation changes:
+
+```text
+translations:icoach:fr-FR
+```
+
+should be invalidated.
+
+When a Common translation changes:
+
+all affected project/language bundles must be invalidated.
+
+For example:
+
+```text
+Common/fr-FR
+```
+
+may affect:
+
+```text
+icoach/fr-FR
+website/fr-FR
+customerportal/fr-FR
+adminportal/fr-FR
+```
+
+Do not unnecessarily invalidate unrelated languages.
+
+---
+
+# 31. MongoDB Data Model
+
+Use MongoDB for persistence.
+
+Expected concepts:
+
+```text
+Applications / Projects
+Languages
+TranslationKeys
+Translations
+TranslationHistory
+```
+
+Do not create unnecessary collections.
+
+Recommended uniqueness:
+
+```text
+Project + Key
+```
+
+for translation keys.
+
+And:
+
+```text
+Project + Language + TranslationKey
+```
+
+for translations.
+
+Use appropriate MongoDB indexes.
+
+---
+
+# 32. MongoDB Is Not a Shared Integration Database
+
+This is important.
+
+Other microservices must NOT depend directly on translation MongoDB collections.
+
+Do not implement:
+
+```text
+Course Service → MongoDB Translation collection
+User Service → MongoDB Translation collection
+Content Service → MongoDB Translation collection
+```
+
+Instead:
+
+```text
+Course Service
+      ↓
+Translation Application
+
+User Service
+      ↓
+Translation Application
+
+Content Service
+      ↓
+Translation Application
+```
+
+External applications:
+
+```text
+External App
+      ↓
+Translation API
+```
+
+This maintains ownership of the Translation domain.
+
+---
+
+# 33. Admin UI
+
+There must be a central web-based Translation Management UI.
+
+The UI must allow authorised users to:
+
+- Manage projects
+- Manage languages
+- Create keys
+- Edit translations
+- Search translations
+- Filter translations
+- Identify missing translations
+- Submit for review
+- Approve translations
+- Publish translations
+- View translation history
+
+The Admin UI must use management APIs/application services.
+
+It must NOT directly access MongoDB.
+
+---
+
+# 34. Translation Grid
+
+Provide a translation grid similar to:
+
+```text
+Key                    English          French
+-----------------------------------------------------
+common.save            Save             Enregistrer
+common.cancel          Cancel           Annuler
+course.start           Start Course     Commencer le cours
+course.complete        Complete         Terminé
+```
+
+Allow filtering by:
+
+```text
+Project
+Language
+Category
+Status
+Common / Project
+Missing
+```
+
+Support RTL languages such as Arabic.
+
+---
+
+# 35. Management API vs Consumer API
+
+Separate management operations from translation consumption.
+
+Management functionality:
+
+```text
+Projects
+Languages
+Keys
+Translations
+Review
+Approval
+Publishing
+History
+```
+
+Consumer functionality:
+
+```http
+GET /api/translations/{project}/{language}
+```
+
+The consumer endpoint must be optimised for:
+
+- Speed
+- Caching
+- Large translation bundles
+- Low network usage
+
+---
+
+# 36. Do Not Create Per-Key APIs
+
+Do NOT implement:
+
+```text
+GET /translation/common.save
+GET /translation/common.cancel
+GET /translation/course.start
+```
+
+Clients should retrieve a translation bundle.
+
+Use:
+
+```http
+GET /api/translations/{project}/{language}
+```
+
+This reduces network traffic and simplifies caching.
+
+---
+
+# 37. Internal Service API
+
+Internal microservices should generally use:
+
+```csharp
+ITranslationService
+```
+
+rather than:
+
+```csharp
+HttpClient
+```
+
+for translation retrieval.
+
+The shared application service should return the same conceptual:
+
+```text
+TranslationBundle
+```
+
+used by the API.
+
+---
+
+# 38. External Client SDK
+
+An SDK is NOT required for the core Translation Service.
+
+The REST API must be sufficient for external consumers.
+
+However, create a reusable client library if it is useful for the organisation's .NET applications.
+
+For example:
+
+```text
+Company.Translation.Client
+```
+
+This may provide:
+
+- HTTP communication
+- ETag
+- Local caching
+- Offline support
+- Fallback
+- Translation lookup
+
+The SDK must remain a client of the API.
+
+It must NOT replace the central Translation Service.
+
+---
+
+# 39. .NET MAUI
+
+MAUI applications should eventually be able to use a reusable client package.
+
+The client should:
+
+1. Load cached translations
+2. Start application
+3. Contact Translation API
+4. Send If-None-Match
+5. Handle 304
+6. Handle 200
+7. Save updated bundle
+8. Work offline where appropriate
+
+Example:
+
+```csharp
+var value =
+    translationService.Get("course.start");
+```
+
+The MAUI client should NOT access MongoDB or Redis.
+
+---
+
+# 40. Websites
+
+Websites should consume:
+
+```http
+GET /api/translations/{project}/{language}
+```
+
+They should cache the bundle appropriately.
+
+The website should not know how translations are stored.
+
+---
+
+# 41. Other Microservices
+
+Other microservices may need translations for:
+
+- Error messages
+- Notifications
+- Emails
+- System messages
+- Validation messages
+- Other user-facing content
+
+They should use the shared Translation Application if they are internal .NET services.
+
+Example:
+
+```csharp
+var bundle =
+    await translationService.GetTranslationsAsync(
+        "customerportal",
+        "fr-FR",
+        cancellationToken);
+```
+
+They must not create their own translation dictionaries.
+
+---
+
+# 42. Business Microservices Should Remain Language Independent
+
+Business microservices should preferably return stable codes.
+
+Example:
+
+```json
+{
+  "code": "COURSE_NOT_FOUND"
+}
+```
+
+rather than:
+
+```json
+{
+  "message": "Course not found"
+}
+```
+
+The consuming application can resolve:
+
+```text
+errors.course_not_found
+```
+
+through the Translation Service.
+
+Do not put translation dictionaries into business microservices.
+
+---
+
+# 43. Remove Unused Code
+
+Inspect the existing solution for:
+
+- Unused projects
+- Unused classes
+- Unused interfaces
+- Unused DTOs
+- Unused repositories
+- Unused services
+- Unused NuGet packages
+- Unused configuration
+- Obsolete translation models
+- Duplicate translation implementations
+- Obsolete endpoints
+
+Remove code only when it is confirmed to be unused or obsolete.
+
+Do not delete uncertain functionality.
+
+---
+
+# 44. Remove Unwanted Data Structures
+
+Identify old translation-related:
+
+- Collections
+- Models
+- Tables
+- Configuration
+- Cached data
+- Files
+
+Do NOT automatically delete production data.
+
+Instead:
+
+1. Identify it.
+2. Determine what depends on it.
+3. Document it.
+4. Create a migration/cleanup script.
+5. Validate migration.
+6. Only then remove obsolete data.
+
+---
+
+# 45. Authentication
+
+Management functionality must be protected.
+
+Use the existing authentication architecture if appropriate.
+
+Otherwise support Microsoft Entra ID / OpenID Connect.
+
+Suggested roles:
+
+```text
+TranslationAdministrator
+TranslationManager
+Translator
+TranslationReviewer
+TranslationReadOnly
+```
+
+Consumer access should be separate from management access.
+
+External applications should not receive management permissions merely because they consume translations.
+
+---
+
+# 46. Authorisation
+
+Example:
+
+Administrator:
+
+```text
+Everything
+```
+
+Manager:
+
+```text
+Create
+Edit
+Review
+Approve
+Publish
+```
+
+Translator:
+
+```text
+Create
+Edit
+Submit for Review
+```
+
+Reviewer:
+
+```text
+Review
+Approve
+```
+
+ReadOnly:
+
+```text
+View
+```
+
+Enforce permissions at the application/API layer.
+
+---
+
+# 47. Security
+
+Do not commit:
+
+- Passwords
+- API keys
+- Client secrets
+- MongoDB credentials
+- Redis credentials
+- Certificates
+
+Use:
+
+- Environment variables
+- Azure Key Vault
+- Secure pipeline variables
+- Managed identities where appropriate
+
+---
+
+# 48. Health Checks
+
+Provide:
+
+```text
+/health
+/health/live
+/health/ready
+```
+
+Readiness should verify critical dependencies such as MongoDB.
+
+Redis should be treated according to its role as a cache and should not make the service unusable simply because the cache is unavailable unless explicitly required by the architecture.
+
+---
+
+# 49. Logging
+
+Use structured logging.
+
+Important events include:
+
+```text
+Translation created
+Translation updated
+Translation submitted
+Translation approved
+Translation published
+Translation cache hit
+Translation cache miss
+Translation cache invalidated
+Translation bundle generated
+```
+
+Do not log sensitive information unnecessarily.
+
+---
+
+# 50. Failure Behaviour
+
+If Redis is unavailable:
+
+```text
+Translation Application
+        ↓
+MongoDB
+```
+
+The service should continue to operate.
+
+Redis is a performance optimisation, not the source of truth.
+
+If MongoDB is unavailable, return an appropriate service error.
+
+Do not allow external clients to receive incorrect translation data.
+
+---
+
+# 51. Testing
+
+Test the shared Translation Application independently of HTTP.
+
+Test:
+
+```text
+Common resolution
+Project resolution
+Common + Project combination
+Fallback
+Overrides
+Publishing
+History
+```
+
+API tests must test:
+
+```text
+GET bundle
+ETag
+If-None-Match
+304
+200
+Validation
+Authentication
+Authorisation
+```
+
+Integration tests must test:
+
+```text
+MongoDB
+Redis
+Cache invalidation
+```
+
+Internal microservice integration must verify that the shared Translation Application can be registered and consumed without HTTP.
+
+---
+
+# 52. CI/CD
+
+Preserve the existing Azure DevOps architecture if it is already appropriate.
+
+Ensure pipelines perform:
+
+```text
+Restore
+Build
+Unit Tests
+Integration Tests
+Code Coverage
+Security/Dependency Checks
+Docker Build
+Publish Artifacts
+Deploy
+```
+
+Environments:
+
+```text
+Development
+Test
+Staging
+Production
+```
+
+Production deployment must require approval.
+
+Do not store secrets in YAML.
+
+Use:
+
+- Variable Groups
+- Service Connections
+- Azure Key Vault
+- Managed Identity
+- Secure variables
+
+where appropriate.
+
+---
+
+# 53. Docker
+
+If Docker is already used, integrate with the existing implementation.
+
+If required, provide Docker support for:
+
+```text
+Translation API
+Translation Admin
+MongoDB
+Redis
+```
+
+Local development should be possible through Docker Compose where appropriate.
+
+Do not place production secrets in Docker Compose.
+
+---
+
+# 54. Documentation
+
+Maintain:
+
+```text
+docs/
+├── existing-solution-assessment.md
+├── architecture.md
+├── database.md
+├── api.md
+├── internal-consumption.md
+├── external-consumption.md
+├── authentication.md
+├── authorisation.md
+├── caching.md
+├── etag.md
+├── translation-workflow.md
+├── local-development.md
+├── docker.md
+├── azure-deployment.md
+├── azure-devops.md
+├── maui-client.md
+├── migration.md
+└── troubleshooting.md
+```
+
+Document the difference between:
+
+```text
+Internal consumption
+```
+
+and:
+
+```text
+External consumption
+```
+
+clearly.
+
+---
+
+# 55. Final Architecture
+
+The final architecture should conceptually look like:
+
+```text
+                              ┌─────────────────────┐
+                              │      MongoDB        │
+                              │                     │
+                              │ Source of Truth     │
+                              └──────────┬──────────┘
+                                         │
+                                         ▼
+                              ┌─────────────────────┐
+                              │ Translation         │
+                              │ Application         │
+                              │                     │
+                              │ Common              │
+                              │ Project             │
+                              │ Fallback            │
+                              │ Publishing           │
+                              │ Resolution           │
+                              └──────────┬──────────┘
+                                         │
+                              ┌──────────┴──────────┐
+                              │                     │
+                              ▼                     ▼
+                         ┌─────────┐         ┌──────────────┐
+                         │ Redis   │         │ Translation  │
+                         │ Cache   │         │ REST API     │
+                         └─────────┘         └───────┬──────┘
+                                                     │
+                                              External Consumers
+                                                     │
+                         ┌───────────────────────────┼────────────────────┐
+                         │                           │                    │
+                         ▼                           ▼                    ▼
+                      MAUI Apps                  Websites          External Apps
+```
+
+Internal services use the Application directly:
+
+```text
+                 Translation Application
+                          │
+          ┌───────────────┼────────────────┐
+          │               │                │
+          ▼               ▼                ▼
+      Course Service   User Service   Content Service
+```
+
+External applications use HTTP:
+
+```text
+                 Translation REST API
+                          │
+          ┌───────────────┼────────────────┐
+          │               │                │
+          ▼               ▼                ▼
+        MAUI           Website       External Service
+```
+
+---
+
+# 56. Final Principle
+
+The system has ONE translation source and ONE translation engine.
+
+```text
+                         MongoDB
+                       Source of Truth
+                             │
+                             ▼
+                  Translation Application
+                             │
+                 ┌───────────┴───────────┐
+                 │                       │
+                 ▼                       ▼
+        Internal .NET Services       REST API
+                 │                       │
+                 ▼                       ▼
+          Microservices          External Consumers
+```
+
+Internal .NET microservices use the shared application directly.
+
+External applications use the REST API.
+
+Both paths produce the same translation result.
+
+The Translation Service owns:
+
+```text
+Storage
+Resolution
+Common translations
+Project translations
+Fallback
+Publishing
+History
+Caching
+ETag
+```
+
+Consumers should only need to know:
+
+```text
+What project am I?
+What language do I need?
+```
+
+Then request:
+
+```http
+GET /api/translations/{project}/{language}
+```
+
+and receive the complete published translation bundle.
+
+---
+
+# 57. Implementation Rules for Claude
+
+When modifying this repository:
+
+1. Inspect before modifying.
+2. Understand the existing architecture.
+3. Create the assessment document first.
+4. Reuse good existing code.
+5. Refactor instead of duplicating.
+6. Remove confirmed unused code.
+7. Do not remove uncertain functionality.
+8. Do not introduce numeric translation versions.
+9. Do not create per-key APIs.
+10. Do not create separate Common and Project API calls for consumers.
+11. Return Common + Project translations in one bundle.
+12. Keep translation logic in the Application layer.
+13. Keep MongoDB access inside Translation Infrastructure.
+14. Do not allow other microservices to directly access translation MongoDB collections.
+15. Do not allow external clients to access MongoDB.
+16. Do not allow external clients to access Redis.
+17. Internal .NET microservices should use ITranslationService directly.
+18. External applications should use the REST API.
+19. Both paths must use the same translation logic.
+20. Keep languages configurable.
+21. Keep projects configurable.
+22. Only return Published translations.
+23. Support fallback.
+24. Support ETag.
+25. Support If-None-Match.
+26. Return 304 when appropriate.
+27. Invalidate the correct Redis cache entries.
+28. Do not hard-code secrets.
+29. Do not duplicate translation dictionaries in business microservices.
+30. Build after significant changes.
+31. Run tests after significant changes.
+32. Fix compilation errors before continuing.
+33. Update documentation when architecture changes.
+34. Do not make unnecessary architectural changes.
+35. Do not over-engineer the solution.
+
+---
+
+# 58. Definition of Done
+
+The implementation is complete when:
+
+- One central translation system exists.
+- MongoDB is the source of truth.
+- Redis is a cache.
+- Internal .NET microservices can directly use ITranslationService.
+- Internal microservices do not require HTTP to obtain translations.
+- Internal microservices do not directly access translation MongoDB collections.
+- External applications can use the REST API.
+- Websites can use the REST API.
+- MAUI applications can use the REST API.
+- Common translations exist.
+- Project-specific translations exist.
+- Common + Project are returned in one payload.
+- Projects are configurable.
+- Languages are configurable.
+- Approximately 20 languages can be supported without code changes.
+- Language fallback works.
+- Only Published translations are returned.
+- Translation history exists.
+- No numeric translation versioning exists.
+- ETag support exists.
+- If-None-Match support exists.
+- 304 responses work.
+- Redis cache invalidation works.
+- Common translation changes invalidate affected bundles.
+- Project translation changes invalidate affected bundles.
+- Admin UI exists.
+- Translation workflow exists.
+- Authentication exists.
+- Authorisation exists.
+- Unused code is removed where safe.
+- Unused dependencies are removed.
+- Obsolete translation structures are identified.
+- Existing business functionality remains intact.
+- Unit tests exist.
+- Integration tests exist.
+- API tests exist.
+- Docker works.
+- Azure DevOps pipelines build successfully.
+- Production deployment is approval protected.
+- Documentation is complete.
+
+The implementation must be production-ready, maintainable, simple and understandable.

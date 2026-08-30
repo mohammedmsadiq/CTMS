@@ -33,7 +33,7 @@ public sealed class ProjectScopedQueryTests : IDisposable
         await _harness.TranslationStringService.UpsertAsync(
             "acme-web", keyId, "fr-FR", new UpsertTranslationStringRequest(value, UpdatedBy: "alice"));
 
-        if (state is ReviewState.NeedsReview or ReviewState.Approved)
+        if (state is ReviewState.InReview or ReviewState.Approved)
         {
             await _harness.TranslationStringService.ReviewAsync("acme-web", keyId, "fr-FR", "submit", "alice");
         }
@@ -47,16 +47,16 @@ public sealed class ProjectScopedQueryTests : IDisposable
     [Fact]
     public async Task ListByProjectAsync_filters_by_review_state()
     {
-        await SeedStringAsync(await AddKeyAsync("a"), "va", ReviewState.NeedsReview);
-        await SeedStringAsync(await AddKeyAsync("b"), "vb", ReviewState.NeedsReview);
+        await SeedStringAsync(await AddKeyAsync("a"), "va", ReviewState.InReview);
+        await SeedStringAsync(await AddKeyAsync("b"), "vb", ReviewState.InReview);
         await SeedStringAsync(await AddKeyAsync("c"), "vc", ReviewState.Approved);
         await SeedStringAsync(await AddKeyAsync("d"), "vd", ReviewState.Draft);
 
-        var page = await _harness.TranslationStringService.ListByProjectAsync("acme-web", "NeedsReview", 0, 50);
+        var page = await _harness.TranslationStringService.ListByProjectAsync("acme-web", "InReview", 0, 50);
 
         Assert.NotNull(page);
         Assert.Equal(2, page!.Total);
-        Assert.All(page.Items, s => Assert.Equal("NeedsReview", s.Status));
+        Assert.All(page.Items, s => Assert.Equal("InReview", s.Status));
         Assert.All(page.Items, s => Assert.Equal("fr-FR", s.LanguageCode));
     }
 

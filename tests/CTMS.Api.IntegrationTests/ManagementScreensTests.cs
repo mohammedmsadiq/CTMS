@@ -12,7 +12,7 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class ManagementScreensTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     private HttpClient _client = null!;
-    private ApplicationDto _app = null!;
+    private ProjectDto _app = null!;
 
     public override async Task InitializeAsync()
     {
@@ -36,14 +36,14 @@ public sealed class ManagementScreensTests(MongoFixture mongo) : IntegrationTest
     public async Task Grid_returns_rows_with_language_cells_and_search_matches_values()
     {
         var grid = (await _client.GetFromJsonAsync<PagedResult<TranslationRowDto>>(
-            $"/api/translations?application={_app.Code}"))!;
+            $"/api/translations?project={_app.Code}"))!;
         Assert.Equal(2, grid.Total);
         var row = grid.Items.Single(r => r.Key == "course.start");
         Assert.Equal("Start", row.Values["en-GB"].Value);
         Assert.Equal("Approved", row.Values["fr-FR"].Status);
 
         var search = (await _client.GetFromJsonAsync<PagedResult<TranslationRowDto>>(
-            $"/api/translations?application={_app.Code}&search=commencer"))!;
+            $"/api/translations?project={_app.Code}&search=commencer"))!;
         Assert.Equal(["course.start"], search.Items.Select(r => r.Key));
     }
 
@@ -51,7 +51,7 @@ public sealed class ManagementScreensTests(MongoFixture mongo) : IntegrationTest
     public async Task Categories_returns_distinct_values()
     {
         var categories = (await _client.GetFromJsonAsync<List<string>>(
-            $"/api/categories?application={_app.Code}"))!;
+            $"/api/categories?project={_app.Code}"))!;
         Assert.Equal(["Course", "Navigation"], categories);
     }
 
@@ -59,9 +59,9 @@ public sealed class ManagementScreensTests(MongoFixture mongo) : IntegrationTest
     public async Task Dashboard_reports_coverage_with_non_draft_as_translated()
     {
         var dashboard = (await _client.GetFromJsonAsync<DashboardResponse>(
-            $"/api/dashboard?application={_app.Code}"))!;
+            $"/api/dashboard?project={_app.Code}"))!;
 
-        Assert.Equal(1, dashboard.ApplicationCount);
+        Assert.Equal(1, dashboard.ProjectCount);
         Assert.Equal(2, dashboard.LanguageCount);
         Assert.Equal(2, dashboard.KeyCount);
         Assert.Equal(0, dashboard.Coverage.Single(c => c.LanguageCode == "en-GB").TranslatedCount);
@@ -72,7 +72,7 @@ public sealed class ManagementScreensTests(MongoFixture mongo) : IntegrationTest
     public async Task Missing_lists_keys_without_a_non_draft_value_per_language()
     {
         var missing = (await _client.GetFromJsonAsync<PagedResult<MissingTranslationDto>>(
-            $"/api/translations/missing?application={_app.Code}&language=fr-FR"))!;
+            $"/api/translations/missing?project={_app.Code}&language=fr-FR"))!;
 
         var row = Assert.Single(missing.Items);
         Assert.Equal("nav.home", row.Key);

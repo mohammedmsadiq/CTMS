@@ -12,7 +12,7 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class HistoryTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     private HttpClient _client = null!;
-    private ApplicationDto _app = null!;
+    private ProjectDto _app = null!;
     private TranslationKeyDto _key = null!;
 
     public override async Task InitializeAsync()
@@ -34,7 +34,7 @@ public sealed class HistoryTests(MongoFixture mongo) : IntegrationTest(mongo)
     public async Task Application_history_has_the_workflow_entries_newest_first()
     {
         var page = (await _client.GetFromJsonAsync<PagedResult<AuditEntryDto>>(
-            $"/api/applications/{_app.Code}/history"))!;
+            $"/api/projects/{_app.Code}/history"))!;
 
         Assert.Contains(page.Items, e => e.Action == "Created" && e.EntityType == "TranslationString");
         Assert.Contains(page.Items, e => e.Action == "Submitted");
@@ -48,7 +48,7 @@ public sealed class HistoryTests(MongoFixture mongo) : IntegrationTest(mongo)
     public async Task Per_string_history_shows_value_diffs()
     {
         var entries = (await _client.GetFromJsonAsync<List<AuditEntryDto>>(
-            $"/api/applications/{_app.Code}/keys/{_key.Id}/strings/en-GB/history"))!;
+            $"/api/projects/{_app.Code}/keys/{_key.Id}/strings/en-GB/history"))!;
 
         Assert.All(entries, e => Assert.Equal("TranslationString", e.EntityType));
 

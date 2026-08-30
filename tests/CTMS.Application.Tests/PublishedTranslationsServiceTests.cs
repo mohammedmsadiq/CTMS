@@ -27,7 +27,7 @@ public sealed class PublishedTranslationsServiceTests : IDisposable
     private PublishedTranslationsService Service => _harness.PublishedTranslationsService;
 
     private async Task<Guid> AppAsync(string slug, bool shared, params string[] languages)
-        => (await Seed.ApplicationAsync(_harness, slug, "en-GB", languages, isShared: shared)).Id;
+        => (await Seed.ApplicationAsync(_harness, slug, "en-GB", languages, isCommon: shared)).Id;
 
     [Fact]
     public async Task GetPublishedAsync_assembles_published_values_ordered_by_key()
@@ -109,6 +109,34 @@ public sealed class PublishedTranslationsServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPublishedAsync_never_serves_an_archived_string()
+    {
+        var app = await AppAsync("icoach", shared: false, "en-GB", "fr-FR");
+        var live = await Seed.KeyAsync(_harness, app, "a.live", "Course");
+        var dead = await Seed.KeyAsync(_harness, app, "b.dead", "Course");
+        await Seed.StringAsync(_harness, live.Id, "fr-FR", "Vivant", ReviewState.Published);
+        await Seed.StringAsync(_harness, dead.Id, "fr-FR", "Mort", ReviewState.Archived);
+
+        var view = await Service.GetPublishedAsync("icoach", "fr-FR");
+
+        Assert.Equal(["a.live"], view!.Translations.Keys);
+    }
+
+    [Fact]
+    public async Task GetGridAsync_hides_archived_cells_unless_status_is_Archived()
+    {
+        var app = await AppAsync("icoach", shared: false, "en-GB");
+        var key = await Seed.KeyAsync(_harness, app, "a.one", "Course");
+        await Seed.StringAsync(_harness, key.Id, "en-GB", "Retired", ReviewState.Archived);
+
+        var normal = await Service.GetGridAsync("icoach", null, null, null, 0, 50);
+        Assert.DoesNotContain("en-GB", normal!.Items.Single().Values.Keys);
+
+        var archived = await Service.GetGridAsync("icoach", null, null, null, 0, 50, "Archived");
+        Assert.Equal("Archived", archived!.Items.Single().Values["en-GB"].Status);
+    }
+
+    [Fact]
     public async Task GetPublishedAsync_returns_null_for_unknown_disabled_or_not_enabled_targets()
     {
         await AppAsync("icoach", shared: false, "en-GB");
@@ -139,7 +167,7 @@ public sealed class PublishedTranslationsServiceTests : IDisposable
         var app = await AppAsync("icoach", shared: false, "en-GB", "fr-FR");
         var start = await Seed.KeyAsync(_harness, app, "course.start", "Course");
         await Seed.StringAsync(_harness, start.Id, "en-GB", "Start", ReviewState.Published);
-        await Seed.StringAsync(_harness, start.Id, "fr-FR", "Commencer", ReviewState.NeedsReview);
+        await Seed.StringAsync(_harness, start.Id, "fr-FR", "Commencer", ReviewState.InReview);
         await Seed.KeyAsync(_harness, app, "course.resume", "Course"); // no values at all
 
         var page = await Service.GetGridAsync("icoach", null, null, null, 0, 50);
@@ -149,7 +177,7 @@ public sealed class PublishedTranslationsServiceTests : IDisposable
         var row = page.Items.Single(r => r.Key == "course.start");
         Assert.Equal("Start", row.Values["en-GB"].Value);
         Assert.Equal("Published", row.Values["en-GB"].Status);
-        Assert.Equal("NeedsReview", row.Values["fr-FR"].Status);
+        Assert.Equal("InReview", row.Values["fr-FR"].Status);
         Assert.DoesNotContain("course.resume", page.Items.Single(r => r.Key == "course.resume").Values.Keys);
     }
 
@@ -195,7 +223,7 @@ public sealed class PublishedTranslationsServiceTests : IDisposable
         var dashboard = await Service.GetDashboardAsync("icoach");
 
         Assert.NotNull(dashboard);
-        Assert.Equal(1, dashboard!.ApplicationCount);
+        Assert.Equal(1, dashboard!.ProjectCount);
         Assert.Equal(2, dashboard.LanguageCount);
         Assert.Equal(2, dashboard.KeyCount);
 

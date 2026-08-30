@@ -4,7 +4,7 @@ namespace CTMS.Domain.Projects;
 
 /// <summary>
 /// A translatable application whose strings CTMS manages. The <see cref="Slug"/> doubles as the
-/// application <em>code</em> used on the client delivery routes. A <see cref="IsShared"/>
+/// application <em>code</em> used on the client delivery routes. A <see cref="IsCommon"/>
 /// application (e.g. <c>common</c>) contributes its published translations to every other
 /// application's bundle.
 /// </summary>
@@ -20,14 +20,14 @@ public sealed class Project : Entity
         string slug,
         string baseLanguageCode,
         string? description = null,
-        bool isShared = false,
+        bool isCommon = false,
         bool active = true)
     {
         Rename(name);
         SetSlug(slug);
         SetBaseLanguageCode(baseLanguageCode);
         UpdateDescription(description);
-        IsShared = isShared;
+        IsCommon = isCommon;
         Active = active;
     }
 
@@ -41,8 +41,8 @@ public sealed class Project : Entity
     /// <summary>BCP-47 code of the language source strings are authored in.</summary>
     public string BaseLanguageCode { get; private set; } = string.Empty;
 
-    /// <summary>A shared application's published translations merge into every application's bundle.</summary>
-    public bool IsShared { get; private set; }
+    /// <summary>A common project's published translations merge into every project's bundle.</summary>
+    public bool IsCommon { get; private set; }
 
     /// <summary>Inactive applications are hidden from delivery.</summary>
     public bool Active { get; private set; }
@@ -71,7 +71,7 @@ public sealed class Project : Entity
     public void UpdateDescription(string? description)
         => Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
 
-    public void SetShared(bool isShared) => IsShared = isShared;
+    public void SetCommon(bool isCommon) => IsCommon = isCommon;
 
     public void SetActive(bool active) => Active = active;
 

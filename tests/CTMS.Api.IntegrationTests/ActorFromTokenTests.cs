@@ -25,7 +25,7 @@ public sealed class ActorFromTokenTests(MongoFixture mongo) : IntegrationTest(mo
         using var translator = Factory.ClientAsActor("translator-alice", AuthRoles.Translator);
 
         using var putResponse = await translator.PutAsJsonAsync(
-            $"/api/applications/{app.Code}/keys/{key.Id}/strings/en-GB",
+            $"/api/projects/{app.Code}/keys/{key.Id}/strings/en-GB",
             new UpsertTranslationStringRequest("hello", UpdatedBy: "someone-else"));
 
         Assert.Equal(HttpStatusCode.Created, putResponse.StatusCode);
@@ -33,7 +33,7 @@ public sealed class ActorFromTokenTests(MongoFixture mongo) : IntegrationTest(mo
         Assert.Equal("translator-alice", created.UpdatedBy);
 
         var fetched = (await translator.GetFromJsonAsync<TranslationStringDto>(
-            $"/api/applications/{app.Code}/keys/{key.Id}/strings/en-GB"))!;
+            $"/api/projects/{app.Code}/keys/{key.Id}/strings/en-GB"))!;
         Assert.Equal("translator-alice", fetched.UpdatedBy);
     }
 }

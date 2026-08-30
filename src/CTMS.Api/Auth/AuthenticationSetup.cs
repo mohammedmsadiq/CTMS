@@ -8,24 +8,17 @@ namespace CTMS.Api.Auth;
 /// Wires authentication + authorization for the API. Two modes, selected by the
 /// <c>Auth:Enabled</c> configuration flag (default <c>true</c>):
 /// <list type="bullet">
-///   <item><b>enabled</b> — validate Entra ID JWT bearer tokens (<c>AzureAd</c> section)
-///   <em>or</em> an <c>X-Api-Key</c> machine key (<see cref="ApiKeyAuthenticationHandler"/>). A
-///   <see cref="CombinedScheme"/> policy scheme is the default: it forwards to
-///   <see cref="ApiKeyAuthenticationHandler.SchemeName"/> when the request carries an
-///   <c>X-Api-Key</c> header, otherwise to <c>Bearer</c>. Every CTMS policy therefore accepts
-///   either credential.</item>
+///   <item><b>enabled</b> — validate Entra ID JWT bearer tokens (<c>AzureAd</c> section) as the
+///   default scheme. Every CTMS policy requires one of the <see cref="AuthRoles"/>.</item>
 ///   <item><b>disabled</b> — register <see cref="DevBypassAuthHandler"/> so local runs and the
-///   test suite work with no IdP. Refused outright under <c>Production</c>. No API-key scheme is
-///   added — the bypass principal already holds every role.</item>
+///   test suite work with no IdP. Refused outright under <c>Production</c>. The bypass principal
+///   already holds every role.</item>
 /// </list>
 /// </summary>
 public static class AuthenticationSetup
 {
     public const string AuthEnabledKey = "Auth:Enabled";
     public const string PublicBundleReadsKey = "Auth:PublicBundleReads";
-
-    /// <summary>The default (policy) scheme when auth is enabled: forwards to Bearer or ApiKey.</summary>
-    public const string CombinedScheme = "CtmsCombined";
 
     public static bool AuthEnabled(this IConfiguration configuration) =>
         configuration.GetValue(AuthEnabledKey, true);
@@ -48,26 +41,9 @@ public static class AuthenticationSetup
 
         if (authEnabled)
         {
-            var authBuilder = builder.Services.AddAuthentication(options =>
-            {
-                options.DefaultScheme = CombinedScheme;
-                options.DefaultChallengeScheme = CombinedScheme;
-            });
-
-            authBuilder.AddMicrosoftIdentityWebApi(configuration.GetSection("AzureAd"));
-
-            authBuilder.AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
-                ApiKeyAuthenticationHandler.SchemeName, _ => { });
-
-            // A request authenticates with a valid bearer token OR a valid X-Api-Key. The header,
-            // when present, wins the selector so a machine call is never silently downgraded.
-            authBuilder.AddPolicyScheme(CombinedScheme, CombinedScheme, options =>
-            {
-                options.ForwardDefaultSelector = context =>
-                    context.Request.Headers.ContainsKey(ApiKeyAuthenticationHandler.HeaderName)
-                        ? ApiKeyAuthenticationHandler.SchemeName
-                        : JwtBearerDefaults.AuthenticationScheme;
-            });
+            builder.Services
+                .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+                .AddMicrosoftIdentityWebApi(configuration.GetSection("AzureAd"));
         }
         else
         {

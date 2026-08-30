@@ -15,7 +15,7 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
     {
         using var client = Factory.ClientAs(AuthRoles.Reader);
 
-        using var response = await client.GetAsync($"/api/applications/{ApiHelpers.UniqueName("nope")}");
+        using var response = await client.GetAsync($"/api/projects/{ApiHelpers.UniqueName("nope")}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -29,8 +29,8 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
         await client.CreateApplicationAsync(code: code);
 
         using var second = await client.PostAsJsonAsync(
-            "/api/applications",
-            new CreateApplicationRequest(ApiHelpers.UniqueName("Other"), "en-GB", code));
+            "/api/projects",
+            new CreateProjectRequest(ApiHelpers.UniqueName("Other"), "en-GB", code));
 
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
@@ -43,7 +43,7 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
         var app = await admin.CreateApplicationAsync();
 
         using var response = await client.PostAsJsonAsync(
-            $"/api/applications/{app.Code}/keys",
+            $"/api/projects/{app.Code}/keys",
             new CreateTranslationKeyRequest("not a valid key!", "Common"));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -56,7 +56,7 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
         var app = await admin.CreateApplicationAsync();
 
         using var response = await admin.PostAsJsonAsync(
-            $"/api/applications/{app.Code}/keys",
+            $"/api/projects/{app.Code}/keys",
             new CreateTranslationKeyRequest("valid.key", ""));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -71,7 +71,7 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
         var app = await admin.CreateApplicationAsync();
 
         using var response = await admin.GetAsync(
-            $"/api/applications/{app.Code}/strings?reviewState=bogus");
+            $"/api/projects/{app.Code}/strings?reviewState=bogus");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

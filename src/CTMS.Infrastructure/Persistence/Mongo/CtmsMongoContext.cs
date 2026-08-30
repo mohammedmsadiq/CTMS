@@ -1,9 +1,7 @@
-using CTMS.Domain.ApiKeys;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
-using CTMS.Domain.Webhooks;
 using MongoDB.Driver;
 
 namespace CTMS.Infrastructure.Persistence.Mongo;
@@ -19,8 +17,6 @@ public sealed class CtmsMongoContext : IMongoContext
     public const string TranslationKeysCollection = "translationKeys";
     public const string TranslationStringsCollection = "translationStrings";
     public const string AuditEntriesCollection = "auditEntries";
-    public const string ApiKeysCollection = "apiKeys";
-    public const string WebhooksCollection = "webhooks";
 
     public CtmsMongoContext(IMongoClient client, string databaseName)
     {
@@ -35,8 +31,6 @@ public sealed class CtmsMongoContext : IMongoContext
         TranslationKeys = Database.GetCollection<TranslationKey>(TranslationKeysCollection);
         TranslationStrings = Database.GetCollection<TranslationString>(TranslationStringsCollection);
         AuditEntries = Database.GetCollection<AuditEntry>(AuditEntriesCollection);
-        ApiKeys = Database.GetCollection<ApiKey>(ApiKeysCollection);
-        Webhooks = Database.GetCollection<Webhook>(WebhooksCollection);
     }
 
     public IMongoDatabase Database { get; }
@@ -50,8 +44,4 @@ public sealed class CtmsMongoContext : IMongoContext
     public IMongoCollection<TranslationString> TranslationStrings { get; }
 
     public IMongoCollection<AuditEntry> AuditEntries { get; }
-
-    public IMongoCollection<ApiKey> ApiKeys { get; }
-
-    public IMongoCollection<Webhook> Webhooks { get; }
 }

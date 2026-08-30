@@ -3,7 +3,7 @@ namespace CTMS.Application.Translations;
 /// <summary>Read model returned by the translation-keys API.</summary>
 public sealed record TranslationKeyDto(
     Guid Id,
-    string Application,
+    string Project,
     string KeyName,
     string Category,
     string? Description,

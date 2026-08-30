@@ -19,12 +19,8 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class AdminUiEnablementTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     [Fact]
-    public async Task Language_suggestions_are_anonymous_and_bulk_create_is_idempotent()
+    public async Task Language_bulk_create_is_idempotent()
     {
-        using var anon = Factory.AnonymousClient();
-        var suggestions = (await anon.GetFromJsonAsync<List<LanguageSuggestionDto>>("/api/languages/suggestions"))!;
-        Assert.Contains(suggestions, s => s.Code == "ar-SA" && s.IsRtl);
-
         using var admin = Factory.ClientAs(AuthRoles.Admin);
         var body = new BulkCreateLanguagesRequest(
         [
@@ -66,8 +62,8 @@ public sealed class AdminUiEnablementTests(MongoFixture mongo) : IntegrationTest
         sb.Append('}');
         Assert.True(sb.Length > 262144);
 
-        var request = new ImportTranslationsRequest("json", "fr-FR", sb.ToString(), Category: "Imported", Status: "NeedsReview");
-        using var response = await admin.PostAsJsonAsync($"/api/applications/{app.Code}/import", request);
+        var request = new ImportTranslationsRequest("json", "fr-FR", sb.ToString(), Category: "Imported", Status: "InReview");
+        using var response = await admin.PostAsJsonAsync($"/api/projects/{app.Code}/import", request);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var result = (await response.Content.ReadFromJsonAsync<ImportTranslationsResult>())!;
@@ -77,7 +73,7 @@ public sealed class AdminUiEnablementTests(MongoFixture mongo) : IntegrationTest
 
         // A malformed body for the declared format is a 400.
         var bad = new ImportTranslationsRequest("json", "fr-FR", "{ not valid");
-        using var badResponse = await admin.PostAsJsonAsync($"/api/applications/{app.Code}/import", bad);
+        using var badResponse = await admin.PostAsJsonAsync($"/api/projects/{app.Code}/import", bad);
         Assert.Equal(HttpStatusCode.BadRequest, badResponse.StatusCode);
     }
 
@@ -98,36 +94,36 @@ public sealed class AdminUiEnablementTests(MongoFixture mongo) : IntegrationTest
         await admin.UpsertStringAsync(app.Code, k3.Id, "fr-FR", "Terminer");
         await admin.ReviewAsync(app.Code, k1.Id, "fr-FR", "submit");
         await admin.ReviewAsync(app.Code, k1.Id, "fr-FR", "approve"); // k1 = Approved
-        await admin.ReviewAsync(app.Code, k3.Id, "fr-FR", "submit");   // k3 = NeedsReview, k2 = Draft
+        await admin.ReviewAsync(app.Code, k3.Id, "fr-FR", "submit");   // k3 = InReview, k2 = Draft
 
-        var invalidStatus = await admin.GetAsync($"/api/translations?application={app.Code}&status=Bogus");
+        var invalidStatus = await admin.GetAsync($"/api/translations?project={app.Code}&status=Bogus");
         Assert.Equal(HttpStatusCode.BadRequest, invalidStatus.StatusCode);
 
         var approvedGrid = (await admin.GetFromJsonAsync<PagedResult<TranslationRowDto>>(
-            $"/api/translations?application={app.Code}&status=Approved"))!;
+            $"/api/translations?project={app.Code}&status=Approved"))!;
         var row = Assert.Single(approvedGrid.Items);
         Assert.Equal("course.start", row.Key);
         Assert.Equal("app", row.Values["fr-FR"].Source);
 
         var preview = (await admin.GetFromJsonAsync<PublishPreviewResponse>(
-            $"/api/translations/publish/preview?application={app.Code}&language=fr-FR"))!;
+            $"/api/translations/publish/preview?project={app.Code}&language=fr-FR"))!;
         Assert.Equal(1, preview.AddedCount); // only k1 (Approved) would be delivered
         Assert.Contains(preview.Changes, c => c.Key == "course.start" && c.Kind == "added");
 
         var missingLanguage = await admin.GetAsync(
-            $"/api/translations/publish/preview?application={app.Code}");
+            $"/api/translations/publish/preview?project={app.Code}");
         Assert.Equal(HttpStatusCode.BadRequest, missingLanguage.StatusCode);
 
         // Bulk review: an unfiltered call is rejected; a filtered one only transitions eligible rows.
         var unfiltered = await admin.PostAsJsonAsync(
-            $"/api/applications/{app.Code}/review-bulk", new ReviewBulkRequest("approve"));
+            $"/api/projects/{app.Code}/review-bulk", new ReviewBulkRequest("approve"));
         Assert.Equal(HttpStatusCode.BadRequest, unfiltered.StatusCode);
 
         var bulk = (await (await admin.PostAsJsonAsync(
-                $"/api/applications/{app.Code}/review-bulk",
+                $"/api/projects/{app.Code}/review-bulk",
                 new ReviewBulkRequest("approve", Language: "fr-FR")))
             .Content.ReadFromJsonAsync<ReviewBulkResult>())!;
-        Assert.Equal(1, bulk.Transitioned); // k3 NeedsReview -> Approved
+        Assert.Equal(1, bulk.Transitioned); // k3 InReview -> Approved
         Assert.Equal(2, bulk.Skipped);      // k1 already Approved, k2 Draft -> approve illegal
     }
 }

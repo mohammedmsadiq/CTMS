@@ -26,10 +26,10 @@ internal static class Seed
         string slug,
         string baseLanguageCode = "en-GB",
         IEnumerable<string>? enabledLanguages = null,
-        bool isShared = false,
+        bool isCommon = false,
         bool active = true)
     {
-        var project = new Project(slug, slug, baseLanguageCode, description: null, isShared: isShared, active: active);
+        var project = new Project(slug, slug, baseLanguageCode, description: null, isCommon: isCommon, active: active);
         if (enabledLanguages is not null)
         {
             project.SetEnabledLanguages(enabledLanguages);
@@ -69,17 +69,20 @@ internal static class Seed
         {
             case ReviewState.Draft:
                 break;
-            case ReviewState.NeedsReview:
-                str.ChangeReviewState(ReviewState.NeedsReview, "seed");
+            case ReviewState.InReview:
+                str.ChangeReviewState(ReviewState.InReview, "seed");
                 break;
             case ReviewState.Approved:
-                str.ChangeReviewState(ReviewState.NeedsReview, "seed");
+                str.ChangeReviewState(ReviewState.InReview, "seed");
                 str.ChangeReviewState(ReviewState.Approved, "seed");
                 break;
             case ReviewState.Published:
-                str.ChangeReviewState(ReviewState.NeedsReview, "seed");
+                str.ChangeReviewState(ReviewState.InReview, "seed");
                 str.ChangeReviewState(ReviewState.Approved, "seed");
                 str.ChangeReviewState(ReviewState.Published, "seed");
+                break;
+            case ReviewState.Archived:
+                str.ChangeReviewState(ReviewState.Archived, "seed");
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(state), state, null);

@@ -15,7 +15,7 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class TranslationDeliveryETagTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     private HttpClient _client = null!;
-    private ApplicationDto _app = null!;
+    private ProjectDto _app = null!;
     private Guid _keyId;
 
     public override async Task InitializeAsync()

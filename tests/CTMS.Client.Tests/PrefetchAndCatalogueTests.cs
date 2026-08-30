@@ -67,7 +67,7 @@ public sealed class PrefetchAndCatalogueTests
     public async Task GetApplicationsAsync_maps_the_catalogue()
     {
         const string json =
-            "[{\"code\":\"icoach\",\"name\":\"iCoach\",\"description\":\"the app\",\"isShared\":false,\"active\":true," +
+            "[{\"code\":\"icoach\",\"name\":\"iCoach\",\"description\":\"the app\",\"isCommon\":false,\"active\":true," +
             "\"baseLanguageCode\":\"en-GB\",\"enabledLanguageCodes\":[\"en-GB\",\"fr-FR\"]," +
             "\"createdAt\":\"2026-01-01T00:00:00Z\",\"updatedAt\":\"2026-02-01T00:00:00Z\"}]";
         var handler = new StubHttpMessageHandler().Enqueue(_ => StubHttpMessageHandler.Json(json));
@@ -75,11 +75,11 @@ public sealed class PrefetchAndCatalogueTests
 
         var apps = await client.GetApplicationsAsync();
 
-        Assert.Equal("/api/applications", handler.Requests[0].Uri.AbsolutePath);
+        Assert.Equal("/api/projects", handler.Requests[0].Uri.AbsolutePath);
         var app = Assert.Single(apps);
         Assert.Equal("icoach", app.Code);
         Assert.Equal(new[] { "en-GB", "fr-FR" }, app.EnabledLanguageCodes);
-        Assert.False(app.IsShared);
+        Assert.False(app.IsCommon);
     }
 
     [Fact]

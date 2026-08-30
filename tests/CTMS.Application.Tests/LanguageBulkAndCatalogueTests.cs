@@ -15,18 +15,6 @@ public sealed class LanguageBulkAndCatalogueTests : IDisposable
     private LanguageService Service => _harness.LanguageService;
 
     [Fact]
-    public void Suggestions_are_a_static_non_persisted_catalogue_with_rtl_flags()
-    {
-        var suggestions = Service.Suggestions();
-
-        Assert.True(suggestions.Count >= 35);
-        Assert.Contains(suggestions, s => s.Code == "en-GB" && !s.IsRtl);
-        Assert.Contains(suggestions, s => s.Code == "ar-SA" && s.IsRtl);
-        Assert.Contains(suggestions, s => s.Code == "he-IL" && s.IsRtl);
-        Assert.All(suggestions.Where(s => s.Code.StartsWith("ar-", StringComparison.Ordinal)), s => Assert.True(s.IsRtl));
-    }
-
-    [Fact]
     public async Task BulkCreateAsync_creates_the_new_ones_and_skips_the_existing_ones()
     {
         await Service.CreateAsync(new CreateLanguageRequest("en-GB", "English"));

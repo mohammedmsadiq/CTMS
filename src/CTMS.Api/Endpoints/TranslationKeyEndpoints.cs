@@ -9,17 +9,17 @@ internal static class TranslationKeyEndpoints
     public static IEndpointRouteBuilder MapTranslationKeyEndpoints(this IEndpointRouteBuilder endpoints)
     {
         // Reads: any recognised role (CanRead). Mutations: admin/manager (CanManageContent).
-        var group = endpoints.MapGroup("/api/applications/{application}/keys").WithTags("Translation keys");
+        var group = endpoints.MapGroup("/api/projects/{project}/keys").WithTags("Translation keys");
 
         group.MapGet("/", async (
-                string application,
+                string project,
                 TranslationKeyService keys,
                 CancellationToken cancellationToken,
                 string? category = null,
                 int skip = 0,
                 int take = 50) =>
             {
-                var page = await keys.ListAsync(application, category, skip, take, cancellationToken);
+                var page = await keys.ListAsync(project, category, skip, take, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
             .WithName("ListTranslationKeys")
@@ -28,12 +28,12 @@ internal static class TranslationKeyEndpoints
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/{keyId:guid}", async (
-                string application,
+                string project,
                 Guid keyId,
                 TranslationKeyService keys,
                 CancellationToken cancellationToken) =>
             {
-                var key = await keys.GetAsync(application, keyId, cancellationToken);
+                var key = await keys.GetAsync(project, keyId, cancellationToken);
                 return key is null ? Results.NotFound() : Results.Ok(key);
             })
             .WithName("GetTranslationKey")
@@ -42,15 +42,15 @@ internal static class TranslationKeyEndpoints
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapPost("/", async (
-                string application,
+                string project,
                 CreateTranslationKeyRequest request,
                 TranslationKeyService keys,
                 HttpContext http,
                 CancellationToken cancellationToken) =>
             {
                 var actor = TokenActor.Resolve(http.User, request.CreatedBy, request.CreatedBy ?? "system");
-                var created = await keys.CreateAsync(application, request, actor, cancellationToken);
-                return Results.CreatedAtRoute("GetTranslationKey", new { application, keyId = created.Id }, created);
+                var created = await keys.CreateAsync(project, request, actor, cancellationToken);
+                return Results.CreatedAtRoute("GetTranslationKey", new { project, keyId = created.Id }, created);
             })
             .WithName("CreateTranslationKey")
             .Produces<TranslationKeyDto>(StatusCodes.Status201Created)
@@ -60,13 +60,13 @@ internal static class TranslationKeyEndpoints
             .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         group.MapPatch("/{keyId:guid}", async (
-                string application,
+                string project,
                 Guid keyId,
                 UpdateTranslationKeyRequest request,
                 TranslationKeyService keys,
                 CancellationToken cancellationToken) =>
             {
-                var updated = await keys.UpdateAsync(application, keyId, request, cancellationToken);
+                var updated = await keys.UpdateAsync(project, keyId, request, cancellationToken);
                 return updated is null ? Results.NotFound() : Results.Ok(updated);
             })
             .WithName("UpdateTranslationKey")
@@ -76,12 +76,12 @@ internal static class TranslationKeyEndpoints
             .RequireAuthorization(AuthorizationPolicies.CanManageContent);
 
         group.MapDelete("/{keyId:guid}", async (
-                string application,
+                string project,
                 Guid keyId,
                 TranslationKeyService keys,
                 CancellationToken cancellationToken) =>
             {
-                var deleted = await keys.DeleteAsync(application, keyId, cancellationToken);
+                var deleted = await keys.DeleteAsync(project, keyId, cancellationToken);
                 return deleted is true ? Results.NoContent() : Results.NotFound();
             })
             .WithName("DeleteTranslationKey")

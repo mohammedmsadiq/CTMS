@@ -1,10 +1,9 @@
-using CTMS.Application.ApiKeys;
+using CTMS.Application;
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
-using CTMS.Application.Webhooks;
 using CTMS.Infrastructure.Persistence.Caching;
 using CTMS.Infrastructure.Persistence.Health;
 using CTMS.Infrastructure.Persistence.Mongo;
@@ -28,6 +27,21 @@ public static class DependencyInjection
     /// in-process distributed-memory cache so a local <c>dotnet run</c> needs no Redis.
     /// </summary>
     public const string RedisConnectionStringName = "Redis";
+
+    /// <summary>
+    /// The single public entry point for an internal .NET consumer (a microservice, a worker,
+    /// a non-web <c>HostBuilder</c>) that wants to inject <see cref="ITranslationService"/> and
+    /// call it directly — no HTTP. Composes the application services and the MongoDB / Redis
+    /// infrastructure they need.
+    /// </summary>
+    public static IServiceCollection AddTranslationServices(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddApplication();
+        services.AddInfrastructure(configuration);
+        return services;
+    }
 
     /// <summary>
     /// Wires the MongoDB client and context, the (no-op) unit of work, repository
@@ -59,8 +73,6 @@ public static class DependencyInjection
         services.AddScoped<ITranslationKeyRepository, TranslationKeyRepository>();
         services.AddScoped<ITranslationStringRepository, TranslationStringRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
-        services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
-        services.AddScoped<IWebhookRepository, WebhookRepository>();
 
         services.AddHealthChecks()
             .AddCheck<MongoHealthCheck>("database", tags: ["ready"]);
@@ -74,7 +86,7 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// Registers the distributed cache that fronts <c>GET /api/translations/{application}/{language}</c>:
+    /// Registers the distributed cache that fronts <c>GET /api/translations/{project}/{language}</c>:
     /// StackExchange.Redis when <c>ConnectionStrings:Redis</c> is set, otherwise an in-process
     /// distributed-memory cache. The active backend is logged once at startup by
     /// <see cref="CacheModeLogger"/>.

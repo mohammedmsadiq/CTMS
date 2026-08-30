@@ -16,10 +16,10 @@ public sealed class ProjectServiceTests : IDisposable
     [Fact]
     public async Task CreateAsync_persists_the_application_and_derives_a_code_from_the_name()
     {
-        var created = await Service.CreateAsync(new CreateApplicationRequest("Acme Web", "en-GB"));
+        var created = await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en-GB"));
 
         Assert.Equal("acme-web", created.Code);
-        Assert.False(created.IsShared);
+        Assert.False(created.IsCommon);
         Assert.True(created.Active);
         Assert.NotEqual(default, created.CreatedAt);
 
@@ -31,10 +31,10 @@ public sealed class ProjectServiceTests : IDisposable
     [Fact]
     public async Task CreateAsync_rejects_a_duplicate_code()
     {
-        await Service.CreateAsync(new CreateApplicationRequest("Acme Web", "en-GB"));
+        await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en-GB"));
 
         var exception = await Assert.ThrowsAsync<SlugAlreadyInUseException>(
-            () => Service.CreateAsync(new CreateApplicationRequest("  ACME   Web  ", "fr-FR")));
+            () => Service.CreateAsync(new CreateProjectRequest("  ACME   Web  ", "fr-FR")));
 
         Assert.Equal("acme-web", exception.Slug);
         Assert.Single(await _harness.Projects.ListAsync(includeInactive: true));
@@ -44,23 +44,23 @@ public sealed class ProjectServiceTests : IDisposable
     public async Task CreateAsync_can_mark_an_application_shared()
     {
         var created = await Service.CreateAsync(
-            new CreateApplicationRequest("Common", "en-GB", IsShared: true));
+            new CreateProjectRequest("Common", "en-GB", IsCommon: true));
 
-        Assert.True(created.IsShared);
+        Assert.True(created.IsCommon);
     }
 
     [Fact]
     public async Task CreateAsync_rejects_a_blank_name()
     {
         await Assert.ThrowsAsync<ValidationException>(
-            () => Service.CreateAsync(new CreateApplicationRequest("   ", "en-GB")));
+            () => Service.CreateAsync(new CreateProjectRequest("   ", "en-GB")));
     }
 
     [Fact]
     public async Task CreateAsync_with_enabled_languages_rejects_an_unknown_language()
     {
         await Assert.ThrowsAsync<ValidationException>(
-            () => Service.CreateAsync(new CreateApplicationRequest(
+            () => Service.CreateAsync(new CreateProjectRequest(
                 "Acme", "en-GB", EnabledLanguageCodes: ["en-GB"])));
     }
 
@@ -69,7 +69,7 @@ public sealed class ProjectServiceTests : IDisposable
     {
         await Seed.LanguageAsync(_harness, "en-GB");
         await Seed.LanguageAsync(_harness, "fr-FR");
-        await Service.CreateAsync(new CreateApplicationRequest("Acme", "en-GB", EnabledLanguageCodes: ["en-GB"]));
+        await Service.CreateAsync(new CreateProjectRequest("Acme", "en-GB", EnabledLanguageCodes: ["en-GB"]));
 
         var updated = await Service.EnableLanguageAsync("acme", "fr-FR");
 
@@ -82,7 +82,7 @@ public sealed class ProjectServiceTests : IDisposable
     {
         await Seed.LanguageAsync(_harness, "en-GB");
         await Seed.LanguageAsync(_harness, "de-DE", active: false);
-        await Service.CreateAsync(new CreateApplicationRequest("Acme", "en-GB"));
+        await Service.CreateAsync(new CreateProjectRequest("Acme", "en-GB"));
 
         await Assert.ThrowsAsync<ValidationException>(() => Service.EnableLanguageAsync("acme", "de-DE"));
     }

@@ -16,8 +16,8 @@ public interface IProjectRepository
 
     Task<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken = default);
 
-    /// <summary>Every shared application (<see cref="Project.IsShared"/>), active only.</summary>
-    Task<IReadOnlyList<Project>> ListSharedAsync(CancellationToken cancellationToken = default);
+    /// <summary>Every common project (<see cref="Project.IsCommon"/>), active only.</summary>
+    Task<IReadOnlyList<Project>> ListCommonAsync(CancellationToken cancellationToken = default);
 
     Task AddAsync(Project project, CancellationToken cancellationToken = default);
 

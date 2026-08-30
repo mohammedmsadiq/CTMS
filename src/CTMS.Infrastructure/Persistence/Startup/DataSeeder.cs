@@ -10,9 +10,9 @@ using MongoDB.Driver;
 namespace CTMS.Infrastructure.Persistence.Startup;
 
 /// <summary>
-/// Populates a language catalogue and two sample applications on startup, but only in the
+/// Populates a language catalogue and two sample projects on startup, but only in the
 /// Development environment and only when <c>Seed:Enabled</c> is <c>true</c>. Idempotent: it does
-/// nothing if the shared <c>common</c> application already exists.
+/// nothing if the <c>common</c> project already exists.
 /// </summary>
 public sealed class DataSeeder : IHostedService
 {
@@ -76,6 +76,8 @@ public sealed class DataSeeder : IHostedService
             new Language("it-IT", "Italian", fallbackCode: "en-GB"),
         };
 
+        // fr-CA -> fr-FR -> en-GB is the reference fallback chain.
+
         await _context.Languages.InsertManyAsync(
             languages.Select(l => l.StampCreated()),
             cancellationToken: cancellationToken);
@@ -84,7 +86,7 @@ public sealed class DataSeeder : IHostedService
     private async Task SeedSharedApplicationAsync(CancellationToken cancellationToken)
     {
         var common = new Project(
-            "Common", SharedApplicationSlug, "en-GB", "Shared strings merged into every application.", isShared: true);
+            "Common", SharedApplicationSlug, "en-GB", "Common strings merged into every project.", isCommon: true);
         common.SetEnabledLanguages(["en-GB", "fr-FR", "de-DE", "es-ES", "ar-AE", "it-IT"]);
         await _context.Projects.InsertOneAsync(common.StampCreated(), cancellationToken: cancellationToken);
 
@@ -95,6 +97,7 @@ public sealed class DataSeeder : IHostedService
             ("de-DE", "Speichern", ReviewState.Published),
         }, cancellationToken);
 
+        // A project (icoach) publishes its own "common.cancel" that overrides this one — see §22.
         await SeedKeyAsync(common.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
         {
             ("en-GB", "Cancel", ReviewState.Published),
@@ -104,6 +107,11 @@ public sealed class DataSeeder : IHostedService
         await SeedKeyAsync(common.Id, "common.delete", "Common", new (string, string, ReviewState)[]
         {
             ("en-GB", "Delete", ReviewState.Published),
+        }, cancellationToken);
+
+        await SeedKeyAsync(common.Id, "common.legacy", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Legacy string", ReviewState.Archived),
         }, cancellationToken);
     }
 
@@ -137,6 +145,18 @@ public sealed class DataSeeder : IHostedService
             ("en-GB", "Home", ReviewState.Published),
             ("fr-FR", "Accueil", ReviewState.Published),
         }, cancellationToken);
+
+        // Project-level override of the common "common.cancel" (see §22).
+        await SeedKeyAsync(icoach.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Exit course", ReviewState.Published),
+            ("fr-FR", "Quitter le cours", ReviewState.Published),
+        }, cancellationToken);
+
+        await SeedKeyAsync(icoach.Id, "course.retired", "Course", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Retired copy", ReviewState.Archived),
+        }, cancellationToken);
     }
 
     private async Task SeedKeyAsync(
@@ -163,17 +183,20 @@ public sealed class DataSeeder : IHostedService
         {
             case ReviewState.Draft:
                 break;
-            case ReviewState.NeedsReview:
-                str.ChangeReviewState(ReviewState.NeedsReview, Seeder);
+            case ReviewState.InReview:
+                str.ChangeReviewState(ReviewState.InReview, Seeder);
                 break;
             case ReviewState.Approved:
-                str.ChangeReviewState(ReviewState.NeedsReview, Seeder);
+                str.ChangeReviewState(ReviewState.InReview, Seeder);
                 str.ChangeReviewState(ReviewState.Approved, Seeder);
                 break;
             case ReviewState.Published:
-                str.ChangeReviewState(ReviewState.NeedsReview, Seeder);
+                str.ChangeReviewState(ReviewState.InReview, Seeder);
                 str.ChangeReviewState(ReviewState.Approved, Seeder);
                 str.ChangeReviewState(ReviewState.Published, Seeder);
+                break;
+            case ReviewState.Archived:
+                str.ChangeReviewState(ReviewState.Archived, Seeder);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(target), target, "Unsupported seed state.");

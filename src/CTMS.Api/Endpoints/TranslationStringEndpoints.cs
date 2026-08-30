@@ -10,23 +10,23 @@ internal static class TranslationStringEndpoints
     {
         // Reads: any recognised role (CanRead). Upsert: translator and up (CanEditStrings).
         var group = endpoints
-            .MapGroup("/api/applications/{application}/keys/{keyId:guid}/strings")
+            .MapGroup("/api/projects/{project}/keys/{keyId:guid}/strings")
             .WithTags("Translation strings");
 
         var applicationGroup = endpoints
-            .MapGroup("/api/applications/{application}/strings")
+            .MapGroup("/api/projects/{project}/strings")
             .WithTags("Translation strings")
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         applicationGroup.MapGet("/", async (
-                string application,
+                string project,
                 TranslationStringService strings,
                 CancellationToken cancellationToken,
                 string? reviewState = null,
                 int skip = 0,
                 int take = 50) =>
             {
-                var page = await strings.ListByProjectAsync(application, reviewState, skip, take, cancellationToken);
+                var page = await strings.ListByProjectAsync(project, reviewState, skip, take, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
             .WithName("ListApplicationTranslationStrings")
@@ -35,12 +35,12 @@ internal static class TranslationStringEndpoints
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/", async (
-                string application,
+                string project,
                 Guid keyId,
                 TranslationStringService strings,
                 CancellationToken cancellationToken) =>
             {
-                var items = await strings.ListByKeyAsync(application, keyId, cancellationToken);
+                var items = await strings.ListByKeyAsync(project, keyId, cancellationToken);
                 return items is null ? Results.NotFound() : Results.Ok(items);
             })
             .WithName("ListTranslationStrings")
@@ -49,13 +49,13 @@ internal static class TranslationStringEndpoints
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/{language}", async (
-                string application,
+                string project,
                 Guid keyId,
                 string language,
                 TranslationStringService strings,
                 CancellationToken cancellationToken) =>
             {
-                var translationString = await strings.GetAsync(application, keyId, language, cancellationToken);
+                var translationString = await strings.GetAsync(project, keyId, language, cancellationToken);
                 return translationString is null ? Results.NotFound() : Results.Ok(translationString);
             })
             .WithName("GetTranslationString")
@@ -64,7 +64,7 @@ internal static class TranslationStringEndpoints
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapPut("/{language}", async (
-                string application,
+                string project,
                 Guid keyId,
                 string language,
                 UpsertTranslationStringRequest request,
@@ -77,9 +77,9 @@ internal static class TranslationStringEndpoints
                 {
                     UpdatedBy = TokenActor.Resolve(http.User, request.UpdatedBy, request.UpdatedBy ?? string.Empty),
                 };
-                var result = await strings.UpsertAsync(application, keyId, language, effective, cancellationToken);
+                var result = await strings.UpsertAsync(project, keyId, language, effective, cancellationToken);
                 return result.Created
-                    ? Results.CreatedAtRoute("GetTranslationString", new { application, keyId, language }, result.String)
+                    ? Results.CreatedAtRoute("GetTranslationString", new { project, keyId, language }, result.String)
                     : Results.Ok(result.String);
             })
             .WithName("UpsertTranslationString")

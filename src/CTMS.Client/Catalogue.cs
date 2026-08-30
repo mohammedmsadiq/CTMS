@@ -50,7 +50,7 @@ public sealed class LanguageInfo
 }
 
 /// <summary>
-/// One entry from <c>GET /api/applications</c> — an application (the <c>Project</c> aggregate),
+/// One entry from <c>GET /api/projects</c> — a project,
 /// keyed by its <see cref="Code"/> (the slug used on client routes).
 /// </summary>
 public sealed class ApplicationInfo
@@ -59,7 +59,7 @@ public sealed class ApplicationInfo
         string code,
         string name,
         string? description,
-        bool isShared,
+        bool isCommon,
         bool active,
         string baseLanguageCode,
         IReadOnlyList<string> enabledLanguageCodes,
@@ -69,7 +69,7 @@ public sealed class ApplicationInfo
         Code = code;
         Name = name;
         Description = description;
-        IsShared = isShared;
+        IsCommon = isCommon;
         Active = active;
         BaseLanguageCode = baseLanguageCode;
         EnabledLanguageCodes = enabledLanguageCodes;
@@ -86,8 +86,8 @@ public sealed class ApplicationInfo
     /// <summary>Optional description.</summary>
     public string? Description { get; }
 
-    /// <summary>A shared application whose published translations merge into every application's set.</summary>
-    public bool IsShared { get; }
+    /// <summary>A common project whose published translations merge into every project's set.</summary>
+    public bool IsCommon { get; }
 
     /// <summary>Whether the application is active.</summary>
     public bool Active { get; }

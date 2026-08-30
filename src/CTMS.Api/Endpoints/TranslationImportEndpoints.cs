@@ -8,16 +8,16 @@ internal static class TranslationImportEndpoints
 {
     public static IEndpointRouteBuilder MapTranslationImportEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // Bulk import a translation file into one (application, language). Admin/manager only.
-        endpoints.MapPost("/api/applications/{application}/import", async (
-                string application,
+        // Bulk import a translation file into one (project, language). Admin/manager only.
+        endpoints.MapPost("/api/projects/{project}/import", async (
+                string project,
                 ImportTranslationsRequest request,
                 TranslationImportService import,
                 HttpContext http,
                 CancellationToken cancellationToken) =>
             {
                 var actor = TokenActor.Resolve(http.User, null, "system");
-                var result = await import.ImportAsync(application, request, actor, cancellationToken);
+                var result = await import.ImportAsync(project, request, actor, cancellationToken);
                 return Results.Ok(result);
             })
             .WithName("ImportTranslations")

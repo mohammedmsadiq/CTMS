@@ -1,10 +1,8 @@
-using CTMS.Application.ApiKeys;
 using CTMS.Application.Audit;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
 using CTMS.Application.Translations.Import;
-using CTMS.Application.Webhooks;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CTMS.Application;
@@ -20,10 +18,9 @@ public static class DependencyInjection
         services.AddScoped<TranslationStringService>();
         services.AddScoped<TranslationCacheInvalidator>();
         services.AddScoped<PublishedTranslationsService>();
+        services.AddScoped<ITranslationService, TranslationService>();
         services.AddScoped<TranslationImportService>();
         services.AddScoped<AuditService>();
-        services.AddScoped<ApiKeyService>();
-        services.AddScoped<WebhookService>();
         return services;
     }
 }

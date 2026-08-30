@@ -21,7 +21,7 @@ public sealed class ProjectService
         _unitOfWork = unitOfWork;
     }
 
-    public async Task<IReadOnlyList<ApplicationDto>> ListAsync(
+    public async Task<IReadOnlyList<ProjectDto>> ListAsync(
         bool includeInactive,
         CancellationToken cancellationToken = default)
     {
@@ -29,14 +29,14 @@ public sealed class ProjectService
         return projects.Select(ToDto).ToList();
     }
 
-    public async Task<ApplicationDto?> GetAsync(string code, CancellationToken cancellationToken = default)
+    public async Task<ProjectDto?> GetAsync(string code, CancellationToken cancellationToken = default)
     {
         var project = await _projects.GetBySlugAsync(Slug.From(code ?? string.Empty), cancellationToken);
         return project is null ? null : ToDto(project);
     }
 
-    public async Task<ApplicationDto> CreateAsync(
-        CreateApplicationRequest request,
+    public async Task<ProjectDto> CreateAsync(
+        CreateProjectRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -62,7 +62,7 @@ public sealed class ProjectService
             throw new SlugAlreadyInUseException(slug);
         }
 
-        var project = new Project(request.Name, slug, request.BaseLanguageCode, request.Description, request.IsShared);
+        var project = new Project(request.Name, slug, request.BaseLanguageCode, request.Description, request.IsCommon);
 
         if (request.EnabledLanguageCodes is { Count: > 0 } enabled)
         {
@@ -76,9 +76,9 @@ public sealed class ProjectService
         return ToDto(project);
     }
 
-    public async Task<ApplicationDto?> UpdateAsync(
+    public async Task<ProjectDto?> UpdateAsync(
         string code,
-        UpdateApplicationRequest request,
+        UpdateProjectRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -114,9 +114,9 @@ public sealed class ProjectService
             project.SetBaseLanguageCode(request.BaseLanguageCode);
         }
 
-        if (request.IsShared is { } isShared)
+        if (request.IsCommon is { } isCommon)
         {
-            project.SetShared(isShared);
+            project.SetCommon(isCommon);
         }
 
         if (request.Active is { } active)
@@ -137,7 +137,7 @@ public sealed class ProjectService
     }
 
     /// <summary>Adds a language to an application's enabled set. <c>null</c> if the application is unknown.</summary>
-    public async Task<ApplicationDto?> EnableLanguageAsync(
+    public async Task<ProjectDto?> EnableLanguageAsync(
         string code,
         string languageCode,
         CancellationToken cancellationToken = default)
@@ -158,7 +158,7 @@ public sealed class ProjectService
     }
 
     /// <summary>Removes a language from an application's enabled set. <c>null</c> if the application is unknown.</summary>
-    public async Task<ApplicationDto?> DisableLanguageAsync(
+    public async Task<ProjectDto?> DisableLanguageAsync(
         string code,
         string languageCode,
         CancellationToken cancellationToken = default)
@@ -204,11 +204,11 @@ public sealed class ProjectService
         }
     }
 
-    private static ApplicationDto ToDto(Project project) => new(
+    private static ProjectDto ToDto(Project project) => new(
         project.Slug,
         project.Name,
         project.Description,
-        project.IsShared,
+        project.IsCommon,
         project.Active,
         project.BaseLanguageCode,
         project.EnabledLanguageCodes,

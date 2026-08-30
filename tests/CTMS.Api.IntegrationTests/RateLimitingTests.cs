@@ -36,11 +36,11 @@ public sealed class RateLimitingTests(MongoFixture mongo) : IAsyncLifetime
 
         for (var i = 0; i < Permit; i++)
         {
-            using var ok = await client.GetAsync("/api/applications");
+            using var ok = await client.GetAsync("/api/projects");
             Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
         }
 
-        using var throttled = await client.GetAsync("/api/applications");
+        using var throttled = await client.GetAsync("/api/projects");
 
         Assert.Equal(HttpStatusCode.TooManyRequests, throttled.StatusCode);
         Assert.True(throttled.Headers.Contains("Retry-After"), "429 response must carry a Retry-After header.");

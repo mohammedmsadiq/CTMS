@@ -1,4 +1,3 @@
-using CTMS.Domain.ApiKeys;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
@@ -83,14 +82,5 @@ public sealed class MongoIndexInitializer : IHostedService
                         .Ascending(a => a.Timestamp)),
             },
             cancellationToken: cancellationToken);
-
-        // API keys are looked up by their Base64 SHA-256 hash on every authenticated machine call.
-        await context.ApiKeys.Indexes.CreateOneAsync(
-            new CreateIndexModel<ApiKey>(
-                Builders<ApiKey>.IndexKeys.Ascending(k => k.Hash),
-                unique),
-            cancellationToken: cancellationToken);
-
-        // The webhooks collection is tiny and only ever scanned whole — no index required.
     }
 }

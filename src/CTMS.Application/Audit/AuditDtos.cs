@@ -2,11 +2,11 @@ namespace CTMS.Application.Audit;
 
 /// <summary>Read model for a single audit-log entry.</summary>
 /// <remarks>
-/// <see cref="ApplicationId"/> is the owning application's id (internally the <c>Project.Id</c>).
+/// <see cref="ProjectId"/> is the owning project's id.
 /// </remarks>
 public sealed record AuditEntryDto(
     Guid Id,
-    Guid ApplicationId,
+    Guid ProjectId,
     string EntityType,
     Guid EntityId,
     string Action,

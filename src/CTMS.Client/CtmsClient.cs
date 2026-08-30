@@ -191,7 +191,7 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
     /// <inheritdoc />
     public async Task<IReadOnlyList<ApplicationInfo>> GetApplicationsAsync(CancellationToken cancellationToken = default)
     {
-        var wire = await GetCatalogueAsync<ApplicationWire>("api/applications", cancellationToken).ConfigureAwait(false);
+        var wire = await GetCatalogueAsync<ApplicationWire>("api/projects", cancellationToken).ConfigureAwait(false);
         var result = new List<ApplicationInfo>(wire.Count);
         foreach (var a in wire)
         {
@@ -199,7 +199,7 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
                 a.Code,
                 a.Name,
                 string.IsNullOrEmpty(a.Description) ? null : a.Description,
-                a.IsShared,
+                a.IsCommon,
                 a.Active,
                 a.BaseLanguageCode,
                 a.EnabledLanguageCodes.AsReadOnly(),
@@ -382,7 +382,7 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
 
         return new StoredTranslations
         {
-            Application = string.IsNullOrEmpty(wire.Application) ? _options.Application : wire.Application,
+            Application = string.IsNullOrEmpty(wire.Project) ? _options.Application : wire.Project,
             Language = string.IsNullOrEmpty(wire.Language) ? requestedLanguage.Trim() : wire.Language,
             Entries = new Dictionary<string, string>(wire.Translations, StringComparer.Ordinal),
             Etag = ReadETag(response),

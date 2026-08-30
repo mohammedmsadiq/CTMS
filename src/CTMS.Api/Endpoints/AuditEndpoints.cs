@@ -13,18 +13,18 @@ internal static class AuditEndpoints
     {
         // Read-only audit trail: any recognised role (CanRead).
         var group = endpoints
-            .MapGroup("/api/applications/{application}")
+            .MapGroup("/api/projects/{project}")
             .WithTags("History")
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 
         group.MapGet("/history", async (
-                string application,
+                string project,
                 AuditService audit,
                 CancellationToken cancellationToken,
                 int skip = 0,
                 int take = 50) =>
             {
-                var page = await audit.ListByApplicationAsync(application, skip, take, cancellationToken);
+                var page = await audit.ListByApplicationAsync(project, skip, take, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
             .WithName("ListApplicationHistory")
@@ -32,14 +32,14 @@ internal static class AuditEndpoints
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/keys/{keyId:guid}/strings/{language}/history", async (
-                string application,
+                string project,
                 Guid keyId,
                 string language,
                 TranslationStringService strings,
                 AuditService audit,
                 CancellationToken cancellationToken) =>
             {
-                var translationString = await strings.GetAsync(application, keyId, language, cancellationToken);
+                var translationString = await strings.GetAsync(project, keyId, language, cancellationToken);
                 if (translationString is null)
                 {
                     return Results.NotFound();

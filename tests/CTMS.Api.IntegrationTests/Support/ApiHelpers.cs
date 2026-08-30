@@ -35,31 +35,31 @@ internal static class ApiHelpers
         return (await response.Content.ReadFromJsonAsync<LanguageDto>())!;
     }
 
-    public static async Task<ApplicationDto> CreateApplicationAsync(
+    public static async Task<ProjectDto> CreateApplicationAsync(
         this HttpClient client,
         string? code = null,
         string? name = null,
         string baseLanguageCode = "en-GB",
-        bool isShared = false,
+        bool isCommon = false,
         IReadOnlyList<string>? enabledLanguageCodes = null)
     {
         name ??= UniqueName("App");
         var response = await client.PostAsJsonAsync(
-            "/api/applications",
-            new CreateApplicationRequest(name, baseLanguageCode, code, null, isShared, enabledLanguageCodes));
+            "/api/projects",
+            new CreateProjectRequest(name, baseLanguageCode, code, null, isCommon, enabledLanguageCodes));
         await AssertStatus(response, HttpStatusCode.Created);
-        return (await response.Content.ReadFromJsonAsync<ApplicationDto>())!;
+        return (await response.Content.ReadFromJsonAsync<ProjectDto>())!;
     }
 
-    public static async Task<ApplicationDto> EnableLanguageAsync(
+    public static async Task<ProjectDto> EnableLanguageAsync(
         this HttpClient client,
         string applicationCode,
         string language)
     {
         var response = await client.PutAsync(
-            $"/api/applications/{applicationCode}/languages/{language}", content: null);
+            $"/api/projects/{applicationCode}/languages/{language}", content: null);
         await AssertStatus(response, HttpStatusCode.OK);
-        return (await response.Content.ReadFromJsonAsync<ApplicationDto>())!;
+        return (await response.Content.ReadFromJsonAsync<ProjectDto>())!;
     }
 
     public static async Task<TranslationKeyDto> CreateKeyAsync(
@@ -70,7 +70,7 @@ internal static class ApiHelpers
     {
         keyName ??= "key." + Guid.NewGuid().ToString("N");
         var response = await client.PostAsJsonAsync(
-            $"/api/applications/{applicationCode}/keys",
+            $"/api/projects/{applicationCode}/keys",
             new CreateTranslationKeyRequest(keyName, category));
         await AssertStatus(response, HttpStatusCode.Created);
         return (await response.Content.ReadFromJsonAsync<TranslationKeyDto>())!;
@@ -84,7 +84,7 @@ internal static class ApiHelpers
         string value,
         string? updatedBy = null)
         => client.PutAsJsonAsync(
-            $"/api/applications/{applicationCode}/keys/{keyId}/strings/{language}",
+            $"/api/projects/{applicationCode}/keys/{keyId}/strings/{language}",
             new UpsertTranslationStringRequest(value, updatedBy));
 
     public static async Task<TranslationStringDto> UpsertStringAsync(
@@ -112,7 +112,7 @@ internal static class ApiHelpers
         string action,
         string reviewedBy = "reviewer")
         => client.PostAsJsonAsync(
-            $"/api/applications/{applicationCode}/keys/{keyId}/strings/{language}/review",
+            $"/api/projects/{applicationCode}/keys/{keyId}/strings/{language}/review",
             new ReviewRequest(action, reviewedBy));
 
     public static async Task ReviewAsync(

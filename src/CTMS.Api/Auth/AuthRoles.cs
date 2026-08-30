@@ -9,19 +9,19 @@ namespace CTMS.Api.Auth;
 public static class AuthRoles
 {
     /// <summary>Everything, including creating projects.</summary>
-    public const string Admin = "ctms.admin";
+    public const string Admin = "TranslationAdministrator";
 
-    /// <summary>Manage locales and keys, publish bundles, plus all reviewer/translator rights.</summary>
-    public const string Manager = "ctms.manager";
+    /// <summary>Manage languages and keys, publish, plus all reviewer/translator rights.</summary>
+    public const string Manager = "TranslationManager";
 
     /// <summary>Run review transitions (approve/reject/reopen/publish action), edit strings, read.</summary>
-    public const string Reviewer = "ctms.reviewer";
+    public const string Reviewer = "TranslationReviewer";
 
     /// <summary>Create/edit translation string values, submit for review, read.</summary>
-    public const string Translator = "ctms.translator";
+    public const string Translator = "Translator";
 
     /// <summary>Read-only: every GET.</summary>
-    public const string Reader = "ctms.reader";
+    public const string Reader = "TranslationReadOnly";
 
     /// <summary>All recognised roles — used by the local-dev bypass principal.</summary>
     public static readonly string[] All = [Admin, Manager, Reviewer, Translator, Reader];

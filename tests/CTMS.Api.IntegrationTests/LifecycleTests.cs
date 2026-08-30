@@ -40,7 +40,7 @@ public sealed class LifecycleTests(MongoFixture mongo) : IntegrationTest(mongo)
         Assert.NotNull(getResponse.Headers.ETag);
 
         var body = (await getResponse.Content.ReadFromJsonAsync<PublishedTranslationsResponse>())!;
-        Assert.Equal(app.Code, body.Application);
+        Assert.Equal(app.Code, body.Project);
         Assert.Equal("en-GB", body.Language);
         Assert.Equal(
             new[] { "home.hero.cta", "home.hero.title" },

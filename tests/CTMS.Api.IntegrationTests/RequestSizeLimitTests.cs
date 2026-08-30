@@ -41,7 +41,7 @@ public sealed class RequestSizeLimitTests(MongoFixture mongo) : IAsyncLifetime
         });
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
 
-        using var response = await client.PostAsync("/api/applications", content);
+        using var response = await client.PostAsync("/api/projects", content);
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
     }
@@ -58,7 +58,7 @@ public sealed class RequestSizeLimitTests(MongoFixture mongo) : IAsyncLifetime
         });
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
 
-        using var response = await client.PostAsync("/api/applications", content);
+        using var response = await client.PostAsync("/api/projects", content);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }

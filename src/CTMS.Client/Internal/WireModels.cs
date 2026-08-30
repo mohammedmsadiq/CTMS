@@ -3,10 +3,10 @@ using System.Collections.Generic;
 
 namespace CTMS.Client.Internal;
 
-/// <summary>Wire shape of <c>PublishedTranslationsResponse</c> from the CTMS API.</summary>
+/// <summary>Wire shape of PublishedTranslationsResponse from the CTMS API.</summary>
 internal sealed class TranslationsWire
 {
-    public string Application { get; set; } = string.Empty;
+    public string Project { get; set; } = string.Empty;
 
     public string Language { get; set; } = string.Empty;
 
@@ -31,7 +31,7 @@ internal sealed class LanguageWire
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
-/// <summary>Wire shape of <c>ApplicationDto</c> from <c>GET /api/applications</c>.</summary>
+/// <summary>Wire shape of ProjectDto from GET /api/projects.</summary>
 internal sealed class ApplicationWire
 {
     public string Code { get; set; } = string.Empty;
@@ -40,7 +40,7 @@ internal sealed class ApplicationWire
 
     public string? Description { get; set; }
 
-    public bool IsShared { get; set; }
+    public bool IsCommon { get; set; }
 
     public bool Active { get; set; }
 

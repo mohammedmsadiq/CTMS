@@ -22,7 +22,7 @@ internal sealed class ApplicationExceptionHandler : IExceptionHandler
         {
             ValidationException => (StatusCodes.Status400BadRequest, "Invalid request"),
             NotFoundException => (StatusCodes.Status404NotFound, "Resource not found"),
-            SlugAlreadyInUseException => (StatusCodes.Status409Conflict, "Application code already in use"),
+            SlugAlreadyInUseException => (StatusCodes.Status409Conflict, "Project code already in use"),
             ConflictException => (StatusCodes.Status409Conflict, "Conflict"),
             InvalidReviewTransitionException => (StatusCodes.Status409Conflict, "Invalid review transition"),
             _ => (0, string.Empty),

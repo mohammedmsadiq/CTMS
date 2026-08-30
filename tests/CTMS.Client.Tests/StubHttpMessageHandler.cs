@@ -66,7 +66,7 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         string? etag = null)
     {
         etag ??= ComputeEtag(translations);
-        var payload = JsonSerializer.Serialize(new { application, language, translations });
+        var payload = JsonSerializer.Serialize(new { project = application, language, translations });
 
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {

@@ -59,9 +59,6 @@ public sealed class LanguageService
         return ToDto(language);
     }
 
-    /// <summary>The static BCP-47 catalogue (see <see cref="LanguageCatalogue"/>). Not persisted.</summary>
-    public IReadOnlyList<LanguageSuggestionDto> Suggestions() => LanguageCatalogue.Suggestions;
-
     /// <summary>
     /// Registers every language in <paramref name="request"/> that does not already exist. Existing
     /// codes are skipped, not errored, so the call is idempotent. A single item with a blank code

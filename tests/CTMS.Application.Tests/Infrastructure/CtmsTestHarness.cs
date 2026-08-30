@@ -1,11 +1,9 @@
-using CTMS.Application.ApiKeys;
 using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
 using CTMS.Application.Translations.Import;
-using CTMS.Application.Webhooks;
 using CTMS.Infrastructure.Persistence.Caching;
 using CTMS.Infrastructure.Persistence.Mongo;
 using CTMS.Infrastructure.Persistence.Repositories;
@@ -40,8 +38,6 @@ public sealed class CtmsTestHarness : IDisposable
         Keys = new TranslationKeyRepository(Context);
         Strings = new TranslationStringRepository(Context);
         Audit = new AuditRepository(Context);
-        ApiKeys = new ApiKeyRepository(Context);
-        Webhooks = new WebhookRepository(Context);
 
         DistributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
         TranslationsCache = new PublishedTranslationsCache(
@@ -55,22 +51,18 @@ public sealed class CtmsTestHarness : IDisposable
         LanguageService = new LanguageService(Languages, UnitOfWork);
         TranslationKeyService = new TranslationKeyService(Keys, Projects, UnitOfWork);
         TranslationStringService = new TranslationStringService(
-            Strings, Keys, Languages, Projects, Audit, invalidator, WebhookPublisher, UnitOfWork);
+            Strings, Keys, Languages, Projects, Audit, invalidator, UnitOfWork);
         PublishedTranslationsService = new PublishedTranslationsService(
-            Projects, Languages, Keys, Strings, Audit, TranslationsCache, invalidator, WebhookPublisher, UnitOfWork);
+            Projects, Languages, Keys, Strings, Audit, TranslationsCache, invalidator, UnitOfWork);
+        TranslationService = new TranslationService(PublishedTranslationsService);
         TranslationImportService = new TranslationImportService(
             Projects, Languages, Keys, Strings, Audit, invalidator, UnitOfWork);
         AuditService = new AuditService(Audit, Projects);
-        ApiKeyService = new ApiKeyService(ApiKeys);
-        WebhookService = new WebhookService(Webhooks);
     }
 
     public IMongoContext Context { get; }
 
     public IUnitOfWork UnitOfWork { get; } = new NoOpUnitOfWork();
-
-    /// <summary>Records what the publish paths would push to webhooks; assert on <see cref="RecordingWebhookPublisher.Enqueued"/>.</summary>
-    public RecordingWebhookPublisher WebhookPublisher { get; } = new();
 
     public IProjectRepository Projects { get; }
 
@@ -81,10 +73,6 @@ public sealed class CtmsTestHarness : IDisposable
     public ITranslationStringRepository Strings { get; }
 
     public IAuditRepository Audit { get; }
-
-    public IApiKeyRepository ApiKeys { get; }
-
-    public IWebhookRepository Webhooks { get; }
 
     /// <summary>The <see cref="IDistributedCache"/> backing <see cref="TranslationsCache"/> — an
     /// in-memory stand-in for Redis. Exposed so tests can assert on raw cache entries.</summary>
@@ -102,13 +90,11 @@ public sealed class CtmsTestHarness : IDisposable
 
     public PublishedTranslationsService PublishedTranslationsService { get; }
 
+    public ITranslationService TranslationService { get; }
+
     public TranslationImportService TranslationImportService { get; }
 
     public AuditService AuditService { get; }
-
-    public ApiKeyService ApiKeyService { get; }
-
-    public WebhookService WebhookService { get; }
 
     public void Dispose() => _client.DropDatabase(_databaseName);
 }

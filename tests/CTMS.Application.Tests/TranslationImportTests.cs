@@ -75,31 +75,10 @@ public sealed class TranslationImportTests : IDisposable
     }
 
     [Fact]
-    public async Task Csv_reads_the_key_and_value_columns_with_quoting()
+    public async Task An_unknown_format_is_a_validation_error()
     {
-        var body = "key,value\ncourse.start,Commencer\n\"nav.home\",\"Accueil, maison\"\n";
-        var result = await ImportAsync("csv", body);
-
-        Assert.Equal(2, result.CreatedStrings);
-        Assert.Equal("Accueil, maison", (await StringAsync("nav.home"))!.Value);
-    }
-
-    [Fact]
-    public async Task Resx_reads_the_data_value_elements()
-    {
-        var body = """
-            <root>
-              <resheader name="version"><value>2.0</value></resheader>
-              <data name="course.start" xml:space="preserve"><value>Commencer</value></data>
-              <data name="nav.home"><value>Accueil</value></data>
-              <data name="logo" type="System.Resources.ResXFileRef"><value>logo.png</value></data>
-            </root>
-            """;
-        var result = await ImportAsync("resx", body);
-
-        Assert.Equal(2, result.CreatedStrings);
-        Assert.Equal("Commencer", (await StringAsync("course.start"))!.Value);
-        Assert.Null(await StringAsync("logo")); // typed resource skipped
+        var ex = await Assert.ThrowsAsync<ImportFormatException>(() => ImportAsync("csv", "key,value\na,b"));
+        Assert.Contains("json, flat", ex.Message);
     }
 
     [Fact]

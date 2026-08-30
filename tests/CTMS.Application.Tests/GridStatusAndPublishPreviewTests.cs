@@ -21,7 +21,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
     }
 
     private async Task<Guid> AppAsync(string slug, bool shared = false)
-        => (await Seed.ApplicationAsync(_harness, slug, "en-GB", ["en-GB", "fr-FR"], isShared: shared)).Id;
+        => (await Seed.ApplicationAsync(_harness, slug, "en-GB", ["en-GB", "fr-FR"], isCommon: shared)).Id;
 
     [Fact]
     public async Task Grid_status_filter_keeps_rows_with_at_least_one_matching_cell_but_returns_all_cells()

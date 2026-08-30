@@ -2,7 +2,6 @@ using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
-using CTMS.Application.Webhooks;
 using CTMS.Domain.Audit;
 using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
@@ -27,7 +26,7 @@ namespace CTMS.Application.Translations;
 ///   <item>return a flat <c>keyName → value</c> map ordered by key.</item>
 /// </list>
 /// <para><b>"Translated"</b> for coverage / missing means a <see cref="TranslationString"/> exists
-/// in any non-<see cref="ReviewState.Draft"/> state.</para>
+/// in any state other than Draft or Archived.</para>
 /// </remarks>
 public sealed class PublishedTranslationsService
 {
@@ -43,7 +42,6 @@ public sealed class PublishedTranslationsService
     private readonly IAuditRepository _audit;
     private readonly IPublishedTranslationsCache _cache;
     private readonly TranslationCacheInvalidator _invalidator;
-    private readonly IWebhookPublisher _webhooks;
     private readonly IUnitOfWork _unitOfWork;
 
     public PublishedTranslationsService(
@@ -54,7 +52,6 @@ public sealed class PublishedTranslationsService
         IAuditRepository audit,
         IPublishedTranslationsCache cache,
         TranslationCacheInvalidator invalidator,
-        IWebhookPublisher webhooks,
         IUnitOfWork unitOfWork)
     {
         _projects = projects;
@@ -64,7 +61,6 @@ public sealed class PublishedTranslationsService
         _audit = audit;
         _cache = cache;
         _invalidator = invalidator;
-        _webhooks = webhooks;
         _unitOfWork = unitOfWork;
     }
 
@@ -125,7 +121,7 @@ public sealed class PublishedTranslationsService
             .OrderBy(k => k.KeyName, StringComparer.Ordinal)
             .ToList();
 
-        var sharedProjectIds = (await _projects.ListSharedAsync(cancellationToken))
+        var sharedProjectIds = (await _projects.ListCommonAsync(cancellationToken))
             .Where(p => p.Id != app.Id)
             .Select(p => p.Id)
             .ToList();
@@ -249,7 +245,9 @@ public sealed class PublishedTranslationsService
                 || string.Equals(t.Key.Category, normalizedCategory, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
+        // Archived cells are hidden from the grid unless the caller explicitly asks for status=Archived.
         var stringsByKey = (await _strings.ListByKeyIdsAsync(keys.Select(t => t.Key.Id).ToList(), cancellationToken))
+            .Where(s => statusFilter == ReviewState.Archived || s.ReviewState != ReviewState.Archived)
             .GroupBy(s => s.TranslationKeyId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
@@ -303,7 +301,7 @@ public sealed class PublishedTranslationsService
         Scope scope,
         CancellationToken cancellationToken)
     {
-        if (scope.SingleApplication is not { IsShared: false } app)
+        if (scope.SingleApplication is not { IsCommon: false } app)
         {
             return scope.Keys.Select(k => (k, "app")).ToList();
         }
@@ -311,7 +309,7 @@ public sealed class PublishedTranslationsService
         var ownedNames = scope.Keys.Select(k => k.KeyName).ToHashSet(StringComparer.Ordinal);
         var tagged = scope.Keys.Select(k => (Key: k, Source: "app")).ToList();
 
-        var sharedProjects = (await _projects.ListSharedAsync(cancellationToken))
+        var sharedProjects = (await _projects.ListCommonAsync(cancellationToken))
             .Where(p => p.Id != app.Id)
             .ToList();
         if (sharedProjects.Count == 0)
@@ -454,7 +452,7 @@ public sealed class PublishedTranslationsService
             .ToDictionary(l => l.Code, l => l.Name, StringComparer.OrdinalIgnoreCase);
 
         var translatedByLang = (await _strings.ListByKeyIdsAsync(scope.Keys.Select(k => k.Id).ToList(), cancellationToken))
-            .Where(s => s.ReviewState != ReviewState.Draft)
+            .Where(s => s.ReviewState is not ReviewState.Draft and not ReviewState.Archived)
             .GroupBy(s => s.LanguageCode, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Select(s => s.TranslationKeyId).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
 
@@ -514,7 +512,7 @@ public sealed class PublishedTranslationsService
         var targetLanguages = ResolveColumns(scope, languageCode);
 
         var translatedByKey = (await _strings.ListByKeyIdsAsync(scope.Keys.Select(k => k.Id).ToList(), cancellationToken))
-            .Where(s => s.ReviewState != ReviewState.Draft)
+            .Where(s => s.ReviewState is not ReviewState.Draft and not ReviewState.Archived)
             .GroupBy(s => s.TranslationKeyId)
             .ToDictionary(
                 g => g.Key,
@@ -550,8 +548,8 @@ public sealed class PublishedTranslationsService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var app = await _projects.GetBySlugAsync(Slug.From(request.Application ?? string.Empty), cancellationToken)
-            ?? throw new NotFoundException($"Application '{request.Application}' was not found.");
+        var app = await _projects.GetBySlugAsync(Slug.From(request.Project ?? string.Empty), cancellationToken)
+            ?? throw new NotFoundException($"Project '{request.Project}' was not found.");
 
         string? language = null;
         if (!string.IsNullOrWhiteSpace(request.Language))
@@ -593,11 +591,6 @@ public sealed class PublishedTranslationsService
             : approved.Select(s => s.LanguageCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         await _invalidator.InvalidateAsync(app, affectedLanguages, cancellationToken);
-
-        if (approved.Count > 0)
-        {
-            _webhooks.Enqueue(app.Slug, affectedLanguages);
-        }
 
         return new PublishTranslationsResult(approved.Count);
     }

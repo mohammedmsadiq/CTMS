@@ -25,9 +25,6 @@ public sealed record UpdateLanguageRequest(
     bool? IsRtl = null,
     bool? Active = null);
 
-/// <summary>One entry in the static BCP-47 language catalogue offered to the Admin UI wizard.</summary>
-public sealed record LanguageSuggestionDto(string Code, string Name, bool IsRtl);
-
 /// <summary>One language to register in a <see cref="BulkCreateLanguagesRequest"/>.</summary>
 public sealed record BulkCreateLanguageItem(
     string Code,

@@ -46,8 +46,8 @@ public sealed class DataSeederTests : IDisposable
 
         var projects = await _harness.Projects.ListAsync(includeInactive: true);
         var common = projects.Single(p => p.Slug == DataSeeder.SharedApplicationSlug);
-        Assert.True(common.IsShared);
-        Assert.Contains(projects, p => p.Slug == DataSeeder.SampleApplicationSlug && !p.IsShared);
+        Assert.True(common.IsCommon);
+        Assert.Contains(projects, p => p.Slug == DataSeeder.SampleApplicationSlug && !p.IsCommon);
 
         var languages = await _harness.Languages.ListAllAsync();
         Assert.Contains(languages, l => l.Code == "en-GB");

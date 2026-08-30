@@ -16,7 +16,7 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class AuthorizationMatrixTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     private HttpClient _admin = null!;
-    private ApplicationDto _app = null!;
+    private ProjectDto _app = null!;
     private TranslationKeyDto _existingKey = null!;
 
     public override async Task InitializeAsync()
@@ -46,7 +46,7 @@ public sealed class AuthorizationMatrixTests(MongoFixture mongo) : IntegrationTe
     {
         using var client = ClientFor(role);
 
-        using var response = await client.GetAsync($"/api/applications/{_app.Code}");
+        using var response = await client.GetAsync($"/api/projects/{_app.Code}");
 
         Assert.Equal(expected, response.StatusCode);
     }
@@ -63,8 +63,8 @@ public sealed class AuthorizationMatrixTests(MongoFixture mongo) : IntegrationTe
         using var client = ClientFor(role);
 
         using var response = await client.PostAsJsonAsync(
-            "/api/applications",
-            new CreateApplicationRequest(ApiHelpers.UniqueName("authz"), "en-GB"));
+            "/api/projects",
+            new CreateProjectRequest(ApiHelpers.UniqueName("authz"), "en-GB"));
 
         Assert.Equal(expected, response.StatusCode);
     }
@@ -140,7 +140,7 @@ public sealed class AuthorizationMatrixTests(MongoFixture mongo) : IntegrationTe
     {
         using var client = Factory.ClientAs("some.unknown.role");
 
-        using var response = await client.GetAsync($"/api/applications/{_app.Code}");
+        using var response = await client.GetAsync($"/api/projects/{_app.Code}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
