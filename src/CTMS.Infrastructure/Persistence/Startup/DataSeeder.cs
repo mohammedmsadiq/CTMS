@@ -17,7 +17,7 @@ namespace CTMS.Infrastructure.Persistence.Startup;
 public sealed class DataSeeder : IHostedService
 {
     public const string SharedApplicationSlug = "common";
-    public const string SampleApplicationSlug = "icoach";
+    public const string SampleApplicationSlug = "nimbus";
     private const string Seeder = "seeder";
 
     private readonly IMongoContext _context;
@@ -97,7 +97,7 @@ public sealed class DataSeeder : IHostedService
             ("de-DE", "Speichern", ReviewState.Published),
         }, cancellationToken);
 
-        // A project (icoach) publishes its own "common.cancel" that overrides this one — see §22.
+        // A project (nimbus) publishes its own "common.cancel" that overrides this one — see §22.
         await SeedKeyAsync(common.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
         {
             ("en-GB", "Cancel", ReviewState.Published),
@@ -117,11 +117,11 @@ public sealed class DataSeeder : IHostedService
 
     private async Task SeedSampleApplicationAsync(CancellationToken cancellationToken)
     {
-        var icoach = new Project("iCoach", SampleApplicationSlug, "en-GB", "Sample application for local development.");
-        icoach.SetEnabledLanguages(AllLanguageCodes);
-        await _context.Projects.InsertOneAsync(icoach.StampCreated(), cancellationToken: cancellationToken);
+        var nimbus = new Project("Nimbus", SampleApplicationSlug, "en-GB", "Sample application for local development.");
+        nimbus.SetEnabledLanguages(AllLanguageCodes);
+        await _context.Projects.InsertOneAsync(nimbus.StampCreated(), cancellationToken: cancellationToken);
 
-        await SeedKeyAsync(icoach.Id, "course.start", "Course", new (string, string, ReviewState)[]
+        await SeedKeyAsync(nimbus.Id, "course.start", "Course", new (string, string, ReviewState)[]
         {
             ("en-GB", "Start course", ReviewState.Published),
             ("fr-FR", "Commencer le cours", ReviewState.Published),
@@ -129,31 +129,31 @@ public sealed class DataSeeder : IHostedService
             ("es-ES", "Empezar", ReviewState.Draft),
         }, cancellationToken);
 
-        await SeedKeyAsync(icoach.Id, "course.resume", "Course", new (string, string, ReviewState)[]
+        await SeedKeyAsync(nimbus.Id, "course.resume", "Course", new (string, string, ReviewState)[]
         {
             ("en-GB", "Resume course", ReviewState.Published),
             ("fr-FR", "Reprendre le cours", ReviewState.Approved),
         }, cancellationToken);
 
-        await SeedKeyAsync(icoach.Id, "course.complete", "Course", new (string, string, ReviewState)[]
+        await SeedKeyAsync(nimbus.Id, "course.complete", "Course", new (string, string, ReviewState)[]
         {
             ("en-GB", "Complete course", ReviewState.Draft),
         }, cancellationToken);
 
-        await SeedKeyAsync(icoach.Id, "nav.home", "Navigation", new (string, string, ReviewState)[]
+        await SeedKeyAsync(nimbus.Id, "nav.home", "Navigation", new (string, string, ReviewState)[]
         {
             ("en-GB", "Home", ReviewState.Published),
             ("fr-FR", "Accueil", ReviewState.Published),
         }, cancellationToken);
 
         // Project-level override of the common "common.cancel" (see §22).
-        await SeedKeyAsync(icoach.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
+        await SeedKeyAsync(nimbus.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
         {
             ("en-GB", "Exit course", ReviewState.Published),
             ("fr-FR", "Quitter le cours", ReviewState.Published),
         }, cancellationToken);
 
-        await SeedKeyAsync(icoach.Id, "course.retired", "Course", new (string, string, ReviewState)[]
+        await SeedKeyAsync(nimbus.Id, "course.retired", "Course", new (string, string, ReviewState)[]
         {
             ("en-GB", "Retired copy", ReviewState.Archived),
         }, cancellationToken);

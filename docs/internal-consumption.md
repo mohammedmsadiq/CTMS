@@ -60,7 +60,7 @@ public sealed class CourseService
     public async Task<string> GetCourseTitleAsync(string language, CancellationToken ct)
     {
         TranslationBundle bundle =
-            await _translations.GetTranslationsAsync("icoach", language, ct);
+            await _translations.GetTranslationsAsync("nimbus", language, ct);
 
         // bundle.Translations is a flat, ordered keyName -> value map.
         return bundle.Translations.TryGetValue("course.start", out var value)

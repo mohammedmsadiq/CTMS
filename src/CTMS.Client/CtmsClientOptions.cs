@@ -21,7 +21,7 @@ public sealed class CtmsClientOptions
     public Uri? BaseAddress { get; set; }
 
     /// <summary>
-    /// The application <b>code</b> (the <c>Project</c> slug, e.g. <c>icoach</c>) whose published
+    /// The application <b>code</b> (the <c>Project</c> slug, e.g. <c>nimbus</c>) whose published
     /// translations this client fetches. Required; an empty value throws at construction.
     /// </summary>
     public string Application { get; set; } = string.Empty;

@@ -82,7 +82,7 @@ public static class MauiProgram
         builder.Services.AddCtmsClient(options =>
         {
             options.BaseAddress     = new Uri("https://ctms.example.com");
-            options.Application     = "icoach";   // the application code (Project slug)
+            options.Application     = "nimbus";   // the application code (Project slug)
             options.DefaultLanguage = "en-GB";
 
             // FileSystem.AppDataDirectory is the per-user, per-app writable

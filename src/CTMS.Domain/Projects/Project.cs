@@ -33,7 +33,7 @@ public sealed class Project : Entity
 
     public string Name { get; private set; } = string.Empty;
 
-    /// <summary>URL-safe unique identifier and the application <em>code</em>, e.g. <c>icoach</c>.</summary>
+    /// <summary>URL-safe unique identifier and the application <em>code</em>, e.g. <c>nimbus</c>.</summary>
     public string Slug { get; private set; } = string.Empty;
 
     public string? Description { get; private set; }

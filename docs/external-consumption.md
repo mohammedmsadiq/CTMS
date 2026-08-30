@@ -16,7 +16,7 @@ Internal .NET microservices in the same solution use the in-process path instead
 GET /api/translations/{project}/{language}
 ```
 
-- `{project}` is the project **code** (e.g. `icoach`); `{language}` is a BCP-47
+- `{project}` is the project **code** (e.g. `nimbus`); `{language}` is a BCP-47
   code (e.g. `fr-FR`).
 - The response is **Common + Project translations in one payload** — the client
   never makes separate calls for common vs project strings, and never resolves a
@@ -25,7 +25,7 @@ GET /api/translations/{project}/{language}
 
 ```json
 {
-  "project": "icoach",
+  "project": "nimbus",
   "language": "fr-FR",
   "translations": { "common.save": "Enregistrer", "course.start": "Commencer le cours" }
 }
@@ -35,7 +35,7 @@ There are **no per-key endpoints** and no version numbers (spec §27, §36).
 
 ## The ETag round-trip
 
-1. First fetch: `GET /api/translations/icoach/fr-FR` → `200` with
+1. First fetch: `GET /api/translations/nimbus/fr-FR` → `200` with
    `ETag: "abc123"`. Store the body and the ETag.
 2. Next fetch: send `If-None-Match: "abc123"`.
    - Unchanged → `304 Not Modified`, no body. Keep using the stored copy.
@@ -76,10 +76,10 @@ any management permission (spec §45).
 
 ```bash
 # first fetch
-curl -i https://ctms.example.com/api/translations/icoach/fr-FR
+curl -i https://ctms.example.com/api/translations/nimbus/fr-FR
 
 # revalidate
-curl -i -H 'If-None-Match: "abc123"' https://ctms.example.com/api/translations/icoach/fr-FR
+curl -i -H 'If-None-Match: "abc123"' https://ctms.example.com/api/translations/nimbus/fr-FR
 ```
 
 ### .NET `HttpClient` (any app — website, service, non-MAUI)
@@ -87,7 +87,7 @@ curl -i -H 'If-None-Match: "abc123"' https://ctms.example.com/api/translations/i
 ```csharp
 using var http = new HttpClient { BaseAddress = new Uri("https://ctms.example.com") };
 
-var request = new HttpRequestMessage(HttpMethod.Get, "/api/translations/icoach/fr-FR");
+var request = new HttpRequestMessage(HttpMethod.Get, "/api/translations/nimbus/fr-FR");
 if (cachedEtag is not null)
     request.Headers.IfNoneMatch.Add(new EntityTagHeaderValue(cachedEtag));  // cachedEtag includes the quotes
 
@@ -108,14 +108,14 @@ record TranslationsResponse(string Project, string Language, Dictionary<string, 
 ### Browser `fetch` (React / Angular / any website)
 
 ```js
-const res = await fetch(`https://ctms.example.com/api/translations/icoach/${lang}`, {
+const res = await fetch(`https://ctms.example.com/api/translations/nimbus/${lang}`, {
   headers: etag ? { "If-None-Match": etag } : {},
 });
 
 if (res.status === 304) return cached;          // reuse
 const etagHeader = res.headers.get("ETag");
 const { translations } = await res.json();
-localStorage.setItem(`ctms:icoach:${lang}`, JSON.stringify({ etag: etagHeader, translations }));
+localStorage.setItem(`ctms:nimbus:${lang}`, JSON.stringify({ etag: etagHeader, translations }));
 return translations;
 ```
 

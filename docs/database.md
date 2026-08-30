@@ -133,7 +133,7 @@ idempotent (it does nothing if the `common` project already exists). It seeds:
 - **`common`** project (`isCommon: true`) with keys `common.save`,
   `common.cancel`, `common.delete` (mostly `Published`), and `common.legacy`
   (`Archived`).
-- **`icoach`** sample project with `course.*` / `nav.*` keys across
+- **`nimbus`** sample project with `course.*` / `nav.*` keys across
   `Draft` / `Approved` / `Published` states, a project-level `common.cancel`
   override (`"Exit course"`, demonstrating spec §22), and `course.retired`
   (`Archived`).

@@ -41,7 +41,7 @@ using CTMS.Client;
 var client = new CtmsClient(new CtmsClientOptions
 {
     BaseAddress     = new Uri("https://ctms.example.com"),
-    Application     = "icoach",                 // the project code
+    Application     = "nimbus",                 // the project code
     DefaultLanguage = "en-GB",
     CacheDirectory  = "/var/cache/ctms",        // omit for in-memory only
     StalenessTtl    = TimeSpan.FromMinutes(5),  // serve cache for 5 min before revalidating
@@ -179,7 +179,7 @@ cloning on get/set.
 services.AddCtmsClient(options =>
 {
     options.BaseAddress    = new Uri(config["Ctms:BaseUrl"]!);
-    options.Application     = config["Ctms:Project"]!;   // e.g. "icoach"
+    options.Application     = config["Ctms:Project"]!;   // e.g. "nimbus"
     options.DefaultLanguage = "en-GB";
     options.CacheDirectory  = Path.Combine(AppContext.BaseDirectory, "ctms-cache");
     options.StalenessTtl    = TimeSpan.FromMinutes(5);
@@ -215,7 +215,7 @@ using CTMS.Client.Caching;
 builder.Services.AddCtmsClient(options =>
 {
     options.BaseAddress     = new Uri("https://ctms.example.com");
-    options.Application      = "icoach";
+    options.Application      = "nimbus";
     options.DefaultLanguage  = "en-GB";
     // Survives app restarts; per-user, per-app sandbox on every platform.
     options.TranslationStore = new FileTranslationStore(

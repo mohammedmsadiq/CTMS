@@ -143,15 +143,15 @@ sequenceDiagram
     participant Cache as Redis (or in-memory)
     participant Mongo as MongoDB
 
-    C->>Svc: GetPublishedAsync("icoach", "fr-CA")
+    C->>Svc: GetPublishedAsync("nimbus", "fr-CA")
     Svc->>Mongo: resolve project + language
-    Svc->>Cache: GET translations:icoach:fr-ca
+    Svc->>Cache: GET translations:nimbus:fr-ca
     alt cache hit
         Cache-->>Svc: { map, hash }
     else cache miss
         Svc->>Mongo: published strings for project keys + common project keys
         Svc->>Svc: merge (project wins) + fallback walk + content hash
-        Svc->>Cache: SET translations:icoach:fr-ca (TTL 60m)
+        Svc->>Cache: SET translations:nimbus:fr-ca (TTL 60m)
     end
     Svc-->>C: { project, language, translations, hash }
 ```

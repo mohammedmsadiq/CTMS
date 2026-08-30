@@ -5,7 +5,7 @@ namespace CTMS.Client.Tests;
 /// <summary>Builds a <see cref="CtmsClient"/> wired to a stub handler and a controllable clock.</summary>
 internal static class TestClient
 {
-    public const string Application = "icoach";
+    public const string Application = "nimbus";
 
     public static CtmsClient Create(
         StubHttpMessageHandler handler,

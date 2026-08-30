@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 // Runs fully offline against an in-process fake API unless you point it at a real
 // CTMS instance:
 //
-//   CTMS_BASE_URL=http://localhost:5147 CTMS_APPLICATION=icoach \
+//   CTMS_BASE_URL=http://localhost:5147 CTMS_APPLICATION=nimbus \
 //     CTMS_LANGUAGES=fr-CA,fr-FR,en-GB dotnet run --project samples/Ctms.ConsoleSample
 //
 // Demonstrates: prefetch, revalidation (304), offline replay against a dead URL,
@@ -18,7 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 var application = Environment.GetEnvironmentVariable("CTMS_APPLICATION") is { Length: > 0 } rawApp
     ? rawApp
-    : "icoach";
+    : "nimbus";
 
 var baseUrl = Environment.GetEnvironmentVariable("CTMS_BASE_URL");
 var languages = (Environment.GetEnvironmentVariable("CTMS_LANGUAGES") ?? "fr-CA,fr-FR,en-GB")
