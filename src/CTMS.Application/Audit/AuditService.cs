@@ -1,4 +1,5 @@
 using CTMS.Application.Common;
+using CTMS.Application.Projects;
 using CTMS.Domain.Audit;
 
 namespace CTMS.Application.Audit;
@@ -13,8 +14,13 @@ public sealed class AuditService
     private const int MaxPageSize = 200;
 
     private readonly IAuditRepository _audit;
+    private readonly IProjectRepository _projects;
 
-    public AuditService(IAuditRepository audit) => _audit = audit;
+    public AuditService(IAuditRepository audit, IProjectRepository projects)
+    {
+        _audit = audit;
+        _projects = projects;
+    }
 
     public async Task<IReadOnlyList<AuditEntryDto>> ListByEntityAsync(
         string entityType,
@@ -25,12 +31,19 @@ public sealed class AuditService
         return entries.Select(ToDto).ToList();
     }
 
-    public async Task<PagedResult<AuditEntryDto>> ListByProjectAsync(
-        Guid projectId,
+    /// <summary>One page of an application's audit feed, newest first. <c>null</c> if the application is unknown.</summary>
+    public async Task<PagedResult<AuditEntryDto>?> ListByApplicationAsync(
+        string applicationCode,
         int skip,
         int take,
         CancellationToken cancellationToken = default)
     {
+        var project = await _projects.GetBySlugAsync(Slug.From(applicationCode ?? string.Empty), cancellationToken);
+        if (project is null)
+        {
+            return null;
+        }
+
         if (skip < 0)
         {
             skip = 0;
@@ -43,7 +56,7 @@ public sealed class AuditService
             _ => take,
         };
 
-        var page = await _audit.ListByProjectAsync(projectId, skip, take, cancellationToken);
+        var page = await _audit.ListByProjectAsync(project.Id, skip, take, cancellationToken);
         return new PagedResult<AuditEntryDto>(page.Items.Select(ToDto).ToList(), page.Total);
     }
 
@@ -57,5 +70,7 @@ public sealed class AuditService
         entry.Timestamp,
         entry.FromState?.ToString(),
         entry.ToState?.ToString(),
-        entry.Detail);
+        entry.Detail,
+        entry.OldValue,
+        entry.NewValue);
 }

@@ -23,11 +23,13 @@ public sealed class AuditEntry
         string actor,
         ReviewState? fromState = null,
         ReviewState? toState = null,
-        string? detail = null)
+        string? detail = null,
+        string? oldValue = null,
+        string? newValue = null)
     {
         if (projectId == Guid.Empty)
         {
-            throw new ArgumentException("An audit entry must belong to a project.", nameof(projectId));
+            throw new ArgumentException("An audit entry must belong to an application.", nameof(projectId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(entityType);
@@ -47,6 +49,8 @@ public sealed class AuditEntry
         FromState = fromState;
         ToState = toState;
         Detail = string.IsNullOrWhiteSpace(detail) ? null : detail.Trim();
+        OldValue = oldValue;
+        NewValue = newValue;
         Timestamp = DateTime.UtcNow;
     }
 
@@ -73,6 +77,12 @@ public sealed class AuditEntry
     /// <summary>Review state after the operation, when the operation changed review state.</summary>
     public ReviewState? ToState { get; private set; }
 
-    /// <summary>Optional free-form context (e.g. the new value, or a note).</summary>
+    /// <summary>Optional free-form context (e.g. a note or bundle detail).</summary>
     public string? Detail { get; private set; }
+
+    /// <summary>The value before an <see cref="AuditAction.Edited"/> operation, when one changed.</summary>
+    public string? OldValue { get; private set; }
+
+    /// <summary>The value after a <see cref="AuditAction.Created"/> or <see cref="AuditAction.Edited"/> operation.</summary>
+    public string? NewValue { get; private set; }
 }

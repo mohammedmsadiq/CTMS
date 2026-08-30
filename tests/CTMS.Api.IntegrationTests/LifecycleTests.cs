@@ -10,44 +10,64 @@ namespace CTMS.Api.IntegrationTests;
 public sealed class LifecycleTests(MongoFixture mongo) : IntegrationTest(mongo)
 {
     [Fact]
-    public async Task Create_translate_review_publish_then_read_the_bundle()
+    public async Task Create_translate_review_publish_then_read_the_assembled_translations()
     {
         using var client = Factory.ClientAsActor("release-manager", AuthRoles.Admin);
 
-        var project = await client.CreateProjectAsync(slug: ApiHelpers.UniqueName("lifecycle"));
+        await client.CreateLanguageAsync("en-GB", "English");
+        await client.CreateLanguageAsync("fr-FR", "French", fallbackCode: "en-GB");
 
-        var en = await client.CreateLocaleAsync(project.Id, "en", "English");
-        var fr = await client.CreateLocaleAsync(project.Id, "fr", "French");
-        Assert.NotEqual(en.Id, fr.Id);
+        var app = await client.CreateApplicationAsync(
+            code: ApiHelpers.UniqueName("lifecycle"),
+            baseLanguageCode: "en-GB",
+            enabledLanguageCodes: ["en-GB", "fr-FR"]);
 
-        var title = await client.CreateKeyAsync(project.Id, "home.hero.title");
-        var cta = await client.CreateKeyAsync(project.Id, "home.hero.cta");
+        var title = await client.CreateKeyAsync(app.Code, "home.hero.title", "Content");
+        var cta = await client.CreateKeyAsync(app.Code, "home.hero.cta", "Content");
 
-        await client.UpsertStringAsync(project.Id, title.Id, en.Id, "Ship translations faster");
-        await client.UpsertStringAsync(project.Id, cta.Id, en.Id, "Start free trial");
+        await client.UpsertStringAsync(app.Code, title.Id, "en-GB", "Ship translations faster");
+        await client.UpsertStringAsync(app.Code, cta.Id, "en-GB", "Start free trial");
 
         foreach (var key in new[] { title, cta })
         {
-            await client.ReviewAsync(project.Id, key.Id, en.Id, "submit");
-            await client.ReviewAsync(project.Id, key.Id, en.Id, "approve");
-            await client.ReviewAsync(project.Id, key.Id, en.Id, "publish");
+            await client.ReviewAsync(app.Code, key.Id, "en-GB", "submit");
+            await client.ReviewAsync(app.Code, key.Id, "en-GB", "approve");
+            await client.ReviewAsync(app.Code, key.Id, "en-GB", "publish");
         }
 
-        var published = await client.PublishBundleAsync(project.Id, "en");
-        Assert.Equal(1, published.Version);
-        Assert.Equal("en", published.LocaleCode);
-
-        using var getResponse = await client.GetAsync($"/api/projects/{project.Id}/bundles/en");
+        using var getResponse = await client.GetAsync($"/api/translations/{app.Code}/en-GB");
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+        Assert.NotNull(getResponse.Headers.ETag);
 
-        var bundle = (await getResponse.Content.ReadFromJsonAsync<TranslationBundleDto>())!;
-        Assert.Equal(1, bundle.Version);
-        Assert.Equal(published.ETag, bundle.ETag);
-        Assert.False(string.IsNullOrWhiteSpace(bundle.ETag));
+        var body = (await getResponse.Content.ReadFromJsonAsync<PublishedTranslationsResponse>())!;
+        Assert.Equal(app.Code, body.Project);
+        Assert.Equal("en-GB", body.Language);
         Assert.Equal(
             new[] { "home.hero.cta", "home.hero.title" },
-            bundle.Entries.Keys.OrderBy(k => k, StringComparer.Ordinal));
-        Assert.Equal("Ship translations faster", bundle.Entries["home.hero.title"]);
-        Assert.Equal("Start free trial", bundle.Entries["home.hero.cta"]);
+            body.Translations.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal("Ship translations faster", body.Translations["home.hero.title"]);
+        Assert.Equal("Start free trial", body.Translations["home.hero.cta"]);
+    }
+
+    [Fact]
+    public async Task Bulk_publish_promotes_every_approved_string()
+    {
+        using var admin = Factory.ClientAs(AuthRoles.Admin);
+
+        await admin.CreateLanguageAsync("en-GB", "English");
+        var app = await admin.CreateApplicationAsync(
+            code: ApiHelpers.UniqueName("bulk"), enabledLanguageCodes: ["en-GB"]);
+
+        var key = await admin.CreateKeyAsync(app.Code, "k.one", "Common");
+        await admin.UpsertStringAsync(app.Code, key.Id, "en-GB", "One");
+        await admin.ReviewAsync(app.Code, key.Id, "en-GB", "submit");
+        await admin.ReviewAsync(app.Code, key.Id, "en-GB", "approve");
+
+        var result = await admin.BulkPublishAsync(app.Code);
+        Assert.Equal(1, result.Published);
+
+        var body = (await admin.GetFromJsonAsync<PublishedTranslationsResponse>(
+            $"/api/translations/{app.Code}/en-GB"))!;
+        Assert.Equal("One", body.Translations["k.one"]);
     }
 }

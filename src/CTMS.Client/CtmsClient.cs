@@ -15,18 +15,18 @@ using CTMS.Client.Internal;
 namespace CTMS.Client;
 
 /// <summary>
-/// Default <see cref="ICtmsClient"/>. Thread-safe. Construct one per project and reuse it.
+/// Default <see cref="ICtmsClient"/>. Thread-safe. Construct one per application and reuse it.
 /// </summary>
 public sealed class CtmsClient : ICtmsClient, IDisposable
 {
     private readonly CtmsClientOptions _options;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
-    private readonly IBundleStore _store;
+    private readonly ITranslationStore _store;
     private readonly Func<DateTimeOffset> _clock;
 
-    // Latest successfully materialised bundle per locale, for the synchronous Get(...) resolver.
-    private readonly ConcurrentDictionary<string, TranslationBundle> _resolved =
+    // Latest successfully materialised set per language, for the synchronous Get(...) resolver.
+    private readonly ConcurrentDictionary<string, TranslationSet> _resolved =
         new(StringComparer.OrdinalIgnoreCase);
 
     public CtmsClient(CtmsClientOptions options)
@@ -39,17 +39,17 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
     {
     }
 
-    public CtmsClient(CtmsClientOptions options, HttpClient? httpClient, IBundleStore? store)
+    public CtmsClient(CtmsClientOptions options, HttpClient? httpClient, ITranslationStore? store)
         : this(options, httpClient, store, null)
     {
     }
 
-    internal CtmsClient(CtmsClientOptions options, HttpClient? httpClient, IBundleStore? store, Func<DateTimeOffset>? clock)
+    internal CtmsClient(CtmsClientOptions options, HttpClient? httpClient, ITranslationStore? store, Func<DateTimeOffset>? clock)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        if (_options.ProjectId == Guid.Empty)
+        if (string.IsNullOrWhiteSpace(_options.Application))
         {
-            throw new ArgumentException("CtmsClientOptions.ProjectId is required.", nameof(options));
+            throw new ArgumentException("CtmsClientOptions.Application is required.", nameof(options));
         }
 
         var resolvedHttp = httpClient ?? _options.HttpClient;
@@ -78,41 +78,42 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
 
         _http = resolvedHttp;
         _store = store
-            ?? _options.BundleStore
+            ?? _options.TranslationStore
             ?? (string.IsNullOrWhiteSpace(_options.CacheDirectory)
-                ? new InMemoryBundleStore()
-                : new FileBundleStore(_options.CacheDirectory!));
+                ? new InMemoryTranslationStore()
+                : new FileTranslationStore(_options.CacheDirectory!));
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     /// <inheritdoc />
-    public async Task<TranslationBundle> GetBundleAsync(string locale, CancellationToken cancellationToken = default)
+    public async Task<TranslationSet> GetTranslationsAsync(string language, CancellationToken cancellationToken = default)
     {
-        RequireLocale(locale);
-        var cacheKey = LatestKey(locale);
-        var cached = await _store.GetAsync(_options.ProjectId, cacheKey, cancellationToken).ConfigureAwait(false);
+        RequireLanguage(language);
+
+        var app = _options.Application;
+        var cached = await _store.GetAsync(app, language, cancellationToken).ConfigureAwait(false);
         var now = _clock();
 
-        if (cached is not null && now - cached.LastValidatedAt < _options.StalenessTtl)
+        if (cached is not null && _options.StalenessTtl > TimeSpan.Zero && now - cached.LastValidatedAt < _options.StalenessTtl)
         {
-            return Remember(locale, TranslationBundle.FromStored(cached, isStale: false));
+            return Remember(language, TranslationSet.FromStored(cached, isStale: false));
         }
 
         HttpResponseMessage response;
         try
         {
-            response = await SendAsync(BundlePath(locale), cached?.Etag, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(HttpMethod.Get, TranslationsPath(language), cached?.Etag, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
         {
             if (cached is not null)
             {
-                Log($"offline: serving cached bundle '{locale}' v{cached.Version} as stale ({ex.GetType().Name}).");
-                return Remember(locale, TranslationBundle.FromStored(cached, isStale: true));
+                Log($"offline: serving cached translations '{app}/{language}' as stale ({ex.GetType().Name}).");
+                return Remember(language, TranslationSet.FromStored(cached, isStale: true));
             }
 
             throw new CtmsOfflineException(
-                $"No cached bundle for locale '{locale}' and the CTMS API could not be reached.", ex);
+                $"No cached translations for application '{app}' language '{language}' and the CTMS API could not be reached.", ex);
         }
 
         using (response)
@@ -122,13 +123,13 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
                 if (cached is null)
                 {
                     throw new CtmsApiException(
-                        304, "Not Modified", "The API returned 304 but no cached bundle is available.");
+                        304, "Not Modified", "The API returned 304 but no cached translations are available.");
                 }
 
                 cached.LastValidatedAt = now;
-                await _store.SetAsync(_options.ProjectId, cacheKey, cached, cancellationToken).ConfigureAwait(false);
-                Log($"revalidated bundle '{locale}' v{cached.Version} (304).");
-                return Remember(locale, TranslationBundle.FromStored(cached, isStale: false));
+                await _store.SetAsync(app, language, cached, cancellationToken).ConfigureAwait(false);
+                Log($"revalidated translations '{app}/{language}' (304).");
+                return Remember(language, TranslationSet.FromStored(cached, isStale: false));
             }
 
             if (!response.IsSuccessStatusCode)
@@ -136,110 +137,32 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
                 throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
             }
 
-            var wire = await ReadJsonAsync<BundleWire>(response, cancellationToken).ConfigureAwait(false);
-            var stored = ToStored(wire, retrievedAt: now, lastValidatedAt: now);
-            await _store.SetAsync(_options.ProjectId, cacheKey, stored, cancellationToken).ConfigureAwait(false);
-            Log($"fetched bundle '{locale}' v{stored.Version} (200).");
-            return Remember(locale, TranslationBundle.FromStored(stored, isStale: false));
+            var wire = await ReadJsonAsync<TranslationsWire>(response, cancellationToken).ConfigureAwait(false);
+            var stored = ToStored(wire, response, language, retrievedAt: now, lastValidatedAt: now);
+            await _store.SetAsync(app, language, stored, cancellationToken).ConfigureAwait(false);
+            Log($"fetched translations '{app}/{language}' ({stored.Entries.Count} keys, 200).");
+            return Remember(language, TranslationSet.FromStored(stored, isStale: false));
         }
     }
 
     /// <inheritdoc />
-    public async Task<TranslationBundle> GetBundleAsync(string locale, int version, CancellationToken cancellationToken = default)
+    public async Task PrefetchAsync(IEnumerable<string> languages, CancellationToken cancellationToken = default)
     {
-        RequireLocale(locale);
-        if (version < 1)
+        if (languages is null)
         {
-            throw new ArgumentOutOfRangeException(nameof(version), version, "Bundle versions start at 1.");
+            throw new ArgumentNullException(nameof(languages));
         }
 
-        var cacheKey = PinnedKey(locale, version);
-        var cached = await _store.GetAsync(_options.ProjectId, cacheKey, cancellationToken).ConfigureAwait(false);
-        if (cached is not null)
+        foreach (var language in languages)
         {
-            return Remember(locale, TranslationBundle.FromStored(cached, isStale: false));
-        }
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await SendAsync(VersionPath(locale, version), ifNoneMatch: null, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
-        {
-            throw new CtmsOfflineException(
-                $"Pinned bundle '{locale}' v{version} is not cached and the CTMS API could not be reached.", ex);
-        }
-
-        using (response)
-        {
-            if (!response.IsSuccessStatusCode)
-            {
-                throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
-            }
-
-            var now = _clock();
-            var wire = await ReadJsonAsync<BundleWire>(response, cancellationToken).ConfigureAwait(false);
-            var stored = ToStored(wire, retrievedAt: now, lastValidatedAt: now);
-            await _store.SetAsync(_options.ProjectId, cacheKey, stored, cancellationToken).ConfigureAwait(false);
-            return Remember(locale, TranslationBundle.FromStored(stored, isStale: false));
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<IReadOnlyList<BundleVersion>> GetVersionsAsync(string locale, CancellationToken cancellationToken = default)
-    {
-        RequireLocale(locale);
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await SendAsync(VersionsPath(locale), ifNoneMatch: null, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
-        {
-            throw new CtmsOfflineException(
-                $"Version history for locale '{locale}' is unavailable: the CTMS API could not be reached.", ex);
-        }
-
-        using (response)
-        {
-            if (!response.IsSuccessStatusCode)
-            {
-                throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
-            }
-
-            var wire = await ReadJsonAsync<List<BundleVersionWire>>(response, cancellationToken).ConfigureAwait(false)
-                       ?? new List<BundleVersionWire>();
-
-            var result = new List<BundleVersion>(wire.Count);
-            foreach (var v in wire)
-            {
-                result.Add(new BundleVersion(v.Version, v.ETag, v.CreatedAt, v.CreatedBy, v.EntryCount));
-            }
-
-            return result;
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task PrefetchAsync(IEnumerable<string> locales, CancellationToken cancellationToken = default)
-    {
-        if (locales is null)
-        {
-            throw new ArgumentNullException(nameof(locales));
-        }
-
-        foreach (var locale in locales)
-        {
-            if (string.IsNullOrWhiteSpace(locale))
+            if (string.IsNullOrWhiteSpace(language))
             {
                 continue;
             }
 
             try
             {
-                await GetBundleAsync(locale, cancellationToken).ConfigureAwait(false);
+                await GetTranslationsAsync(language, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -247,25 +170,60 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
             }
             catch (CtmsException ex)
             {
-                Log($"prefetch of '{locale}' failed: {ex.Message}");
+                Log($"prefetch of '{language}' failed: {ex.Message}");
             }
         }
     }
 
     /// <inheritdoc />
-    public string? Get(string key, string locale)
+    public async Task<IReadOnlyList<LanguageInfo>> GetLanguagesAsync(CancellationToken cancellationToken = default)
     {
-        RequireKey(key);
-        RequireLocale(locale);
-        return Resolve(key, locale, Array.Empty<string>());
+        var wire = await GetCatalogueAsync<LanguageWire>("api/languages", cancellationToken).ConfigureAwait(false);
+        var result = new List<LanguageInfo>(wire.Count);
+        foreach (var l in wire)
+        {
+            result.Add(new LanguageInfo(l.Code, l.Name, string.IsNullOrEmpty(l.FallbackCode) ? null : l.FallbackCode, l.IsRtl, l.Active, l.CreatedAt, l.UpdatedAt));
+        }
+
+        return result;
     }
 
     /// <inheritdoc />
-    public string Get(string key, string locale, params string[] fallbackLocales)
+    public async Task<IReadOnlyList<ApplicationInfo>> GetApplicationsAsync(CancellationToken cancellationToken = default)
+    {
+        var wire = await GetCatalogueAsync<ApplicationWire>("api/projects", cancellationToken).ConfigureAwait(false);
+        var result = new List<ApplicationInfo>(wire.Count);
+        foreach (var a in wire)
+        {
+            result.Add(new ApplicationInfo(
+                a.Code,
+                a.Name,
+                string.IsNullOrEmpty(a.Description) ? null : a.Description,
+                a.IsCommon,
+                a.Active,
+                a.BaseLanguageCode,
+                a.EnabledLanguageCodes.AsReadOnly(),
+                a.CreatedAt,
+                a.UpdatedAt));
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public string? Get(string key, string language)
     {
         RequireKey(key);
-        RequireLocale(locale);
-        return Resolve(key, locale, fallbackLocales ?? Array.Empty<string>())
+        RequireLanguage(language);
+        return Resolve(key, language, Array.Empty<string>());
+    }
+
+    /// <inheritdoc />
+    public string Get(string key, string language, params string[] extraFallbackLanguages)
+    {
+        RequireKey(key);
+        RequireLanguage(language);
+        return Resolve(key, language, extraFallbackLanguages ?? Array.Empty<string>())
                ?? _options.MissingKeyFallback?.Invoke(key)
                ?? key;
     }
@@ -278,11 +236,11 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
         }
     }
 
-    private string? Resolve(string key, string locale, IReadOnlyList<string> fallbackLocales)
+    private string? Resolve(string key, string language, IReadOnlyList<string> extraFallbackLanguages)
     {
-        foreach (var candidate in LocaleChain.Build(locale, fallbackLocales, _options.DefaultLocale))
+        foreach (var candidate in LanguageChain.Build(language, extraFallbackLanguages, _options.DefaultLanguage))
         {
-            if (_resolved.TryGetValue(candidate, out var bundle) && bundle.Entries.TryGetValue(key, out var value))
+            if (_resolved.TryGetValue(candidate, out var set) && set.Entries.TryGetValue(key, out var value))
             {
                 return value;
             }
@@ -291,20 +249,43 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
         return null;
     }
 
-    private TranslationBundle Remember(string requestLocale, TranslationBundle bundle)
+    private TranslationSet Remember(string requestLanguage, TranslationSet set)
     {
-        _resolved[requestLocale.Trim()] = bundle;
-        if (!string.IsNullOrEmpty(bundle.LocaleCode))
+        _resolved[requestLanguage.Trim()] = set;
+        if (!string.IsNullOrEmpty(set.Language))
         {
-            _resolved[bundle.LocaleCode.Trim()] = bundle;
+            _resolved[set.Language.Trim()] = set;
         }
 
-        return bundle;
+        return set;
     }
 
-    private async Task<HttpResponseMessage> SendAsync(string relativeUrl, string? ifNoneMatch, CancellationToken cancellationToken)
+    private async Task<List<T>> GetCatalogueAsync<T>(string relativeUrl, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, relativeUrl);
+        HttpResponseMessage response;
+        try
+        {
+            response = await SendAsync(HttpMethod.Get, relativeUrl, ifNoneMatch: null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
+        {
+            throw new CtmsOfflineException($"The CTMS catalogue '{relativeUrl}' could not be reached.", ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
+            }
+
+            return await ReadJsonAsync<List<T>>(response, cancellationToken).ConfigureAwait(false) ?? new List<T>();
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string relativeUrl, string? ifNoneMatch, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(method, relativeUrl);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         if (!string.IsNullOrEmpty(ifNoneMatch))
@@ -312,10 +293,13 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
             request.Headers.IfNoneMatch.Add(new EntityTagHeaderValue($"\"{ifNoneMatch}\""));
         }
 
-        var token = await ResolveTokenAsync(cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrEmpty(token))
+        if (request.Headers.Authorization is null)
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            var token = await ResolveTokenAsync(cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(token))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            }
         }
 
         CancellationTokenSource? timeoutCts = null;
@@ -389,28 +373,47 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
         return new CtmsApiException(status, title, detail);
     }
 
-    private StoredBundle ToStored(BundleWire? wire, DateTimeOffset retrievedAt, DateTimeOffset lastValidatedAt)
+    private StoredTranslations ToStored(TranslationsWire? wire, HttpResponseMessage response, string requestedLanguage, DateTimeOffset retrievedAt, DateTimeOffset lastValidatedAt)
     {
         if (wire is null)
         {
-            throw new CtmsApiException(200, "Malformed response", "The CTMS API returned an empty bundle body.");
+            throw new CtmsApiException(200, "Malformed response", "The CTMS API returned an empty translations body.");
         }
 
-        return new StoredBundle
+        return new StoredTranslations
         {
-            ProjectId = wire.ProjectId == Guid.Empty ? _options.ProjectId : wire.ProjectId,
-            LocaleCode = wire.LocaleCode,
-            Version = wire.Version,
-            Entries = new Dictionary<string, string>(wire.Entries, StringComparer.Ordinal),
-            Etag = wire.ETag,
-            CreatedBy = string.IsNullOrEmpty(wire.CreatedBy) ? null : wire.CreatedBy,
-            CreatedAt = wire.CreatedAt == default ? null : wire.CreatedAt,
+            Application = string.IsNullOrEmpty(wire.Project) ? _options.Application : wire.Project,
+            Language = string.IsNullOrEmpty(wire.Language) ? requestedLanguage.Trim() : wire.Language,
+            Entries = new Dictionary<string, string>(wire.Translations, StringComparer.Ordinal),
+            Etag = ReadETag(response),
             RetrievedAt = retrievedAt,
             LastValidatedAt = lastValidatedAt,
         };
     }
 
     private void Log(string message) => _options.DiagnosticsLogger?.Invoke("[CTMS.Client] " + message);
+
+    private static string ReadETag(HttpResponseMessage response)
+    {
+        var tag = response.Headers.ETag?.Tag;
+        if (string.IsNullOrEmpty(tag))
+        {
+            return string.Empty;
+        }
+
+        tag = tag!.Trim();
+        if (tag.StartsWith("W/", StringComparison.Ordinal))
+        {
+            tag = tag.Substring(2).Trim();
+        }
+
+        if (tag.Length >= 2 && tag[0] == '"' && tag[tag.Length - 1] == '"')
+        {
+            tag = tag.Substring(1, tag.Length - 2);
+        }
+
+        return tag;
+    }
 
     private static bool IsTransportFailure(Exception ex, CancellationToken cancellationToken)
     {
@@ -433,22 +436,14 @@ public sealed class CtmsClient : ICtmsClient, IDisposable
         return text.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(text + "/");
     }
 
-    private string BundlePath(string locale) =>
-        $"api/projects/{_options.ProjectId:D}/bundles/{Uri.EscapeDataString(locale.Trim())}";
+    private string TranslationsPath(string language) =>
+        $"api/translations/{Uri.EscapeDataString(_options.Application.Trim())}/{Uri.EscapeDataString(language.Trim())}";
 
-    private string VersionsPath(string locale) => BundlePath(locale) + "/versions";
-
-    private string VersionPath(string locale, int version) => VersionsPath(locale) + "/" + version.ToString();
-
-    private static string LatestKey(string locale) => locale.Trim().ToLowerInvariant();
-
-    private static string PinnedKey(string locale, int version) => LatestKey(locale) + ".v" + version.ToString();
-
-    private static void RequireLocale(string locale)
+    private static void RequireLanguage(string language)
     {
-        if (string.IsNullOrWhiteSpace(locale))
+        if (string.IsNullOrWhiteSpace(language))
         {
-            throw new ArgumentException("A locale code is required.", nameof(locale));
+            throw new ArgumentException("A language code is required.", nameof(language));
         }
     }
 

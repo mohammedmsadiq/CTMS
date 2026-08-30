@@ -1,6 +1,9 @@
 namespace CTMS.Application.Audit;
 
 /// <summary>Read model for a single audit-log entry.</summary>
+/// <remarks>
+/// <see cref="ProjectId"/> is the owning project's id.
+/// </remarks>
 public sealed record AuditEntryDto(
     Guid Id,
     Guid ProjectId,
@@ -11,4 +14,6 @@ public sealed record AuditEntryDto(
     DateTime Timestamp,
     string? FromState,
     string? ToState,
-    string? Detail);
+    string? Detail,
+    string? OldValue,
+    string? NewValue);

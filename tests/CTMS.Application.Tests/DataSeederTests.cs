@@ -35,16 +35,33 @@ public sealed class DataSeederTests : IDisposable
     {
         await Seeder(environmentName).StartAsync(CancellationToken.None);
 
-        Assert.Empty(await _harness.Projects.ListAsync());
+        Assert.Empty(await _harness.Projects.ListAsync(includeInactive: true));
+        Assert.Empty(await _harness.Languages.ListAllAsync());
     }
 
     [Fact]
-    public async Task StartAsync_seeds_the_sample_project_in_Development_when_Seed_Enabled()
+    public async Task StartAsync_seeds_languages_and_a_shared_plus_a_normal_application_in_Development()
     {
         await Seeder(Environments.Development).StartAsync(CancellationToken.None);
 
-        var projects = await _harness.Projects.ListAsync();
-        Assert.Contains(projects, p => p.Slug == "marketing-site");
+        var projects = await _harness.Projects.ListAsync(includeInactive: true);
+        var common = projects.Single(p => p.Slug == DataSeeder.SharedApplicationSlug);
+        Assert.True(common.IsCommon);
+        Assert.Contains(projects, p => p.Slug == DataSeeder.SampleApplicationSlug && !p.IsCommon);
+
+        var languages = await _harness.Languages.ListAllAsync();
+        Assert.Contains(languages, l => l.Code == "en-GB");
+        Assert.Contains(languages, l => l.Code == "ar-AE" && l.IsRtl);
+        Assert.Contains(languages, l => l.Code == "fr-CA" && l.FallbackCode == "fr-FR");
+    }
+
+    [Fact]
+    public async Task StartAsync_is_idempotent()
+    {
+        await Seeder(Environments.Development).StartAsync(CancellationToken.None);
+        await Seeder(Environments.Development).StartAsync(CancellationToken.None);
+
+        Assert.Equal(2, (await _harness.Projects.ListAsync(includeInactive: true)).Count);
     }
 
     public void Dispose() => _harness.Dispose();

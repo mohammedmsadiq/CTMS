@@ -7,8 +7,8 @@ namespace CTMS.Client.Internal;
 internal static class CtmsJson
 {
     /// <summary>
-    /// Case-insensitive so the API's camelCase (<c>localeCode</c>, <c>etag</c>) binds to PascalCase
-    /// members; ignores nulls on write to keep cache files small.
+    /// Case-insensitive so the API's camelCase (<c>fallbackCode</c>, <c>enabledLanguageCodes</c>)
+    /// binds to PascalCase members; ignores nulls on write to keep cache files small.
     /// </summary>
     public static readonly JsonSerializerOptions Options = new()
     {

@@ -4,9 +4,12 @@ namespace CTMS.Domain.Translations;
 public enum ReviewState
 {
     Draft = 0,
-    NeedsReview = 1,
+    InReview = 1,
     Approved = 2,
 
     /// <summary>An approved string that has been released into a published bundle.</summary>
     Published = 3,
+
+    /// <summary>Retired from the workflow. Never served to consumers and excluded from coverage.</summary>
+    Archived = 4,
 }

@@ -1,0 +1,68 @@
+@inject IJSRuntime JS
+
+@* Cycles the colour mode: Auto (follow the OS) → Light → Dark → Auto. The choice is
+   persisted to localStorage by wwwroot/js/theme.js and applied before first paint. *@
+<button type="button" class="btn btn-sm btn-outline-secondary theme-toggle"
+        title="@($"Theme: {Label}. Click to change.")" aria-label="@($"Theme: {Label}")"
+        @onclick="CycleAsync">
+    <span aria-hidden="true">@Glyph</span>
+    <span class="d-none d-lg-inline ms-1">@Label</span>
+</button>
+
+@code {
+    private string _pref = "system";
+
+    private string Label => _pref switch
+    {
+        "light" => "Light",
+        "dark" => "Dark",
+        _ => "Auto",
+    };
+
+    private string Glyph => _pref switch
+    {
+        "light" => "☀",   // sun
+        "dark" => "☾",    // moon
+        _ => "◑",         // half circle
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = await JS.InvokeAsync<string>("ctmsTheme.get");
+            if (!string.IsNullOrEmpty(current) && current != _pref)
+            {
+                _pref = current;
+                StateHasChanged();
+            }
+        }
+        catch (JSException)
+        {
+            // Script not ready / storage blocked — keep the default label.
+        }
+    }
+
+    private async Task CycleAsync()
+    {
+        _pref = _pref switch
+        {
+            "system" => "light",
+            "light" => "dark",
+            _ => "system",
+        };
+        try
+        {
+            await JS.InvokeVoidAsync("ctmsTheme.set", _pref);
+        }
+        catch (JSException)
+        {
+            // ignored — nothing else we can do client-side
+        }
+    }
+}

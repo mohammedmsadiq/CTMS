@@ -1,8 +1,8 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CTMS.Client;
-using CTMS.Client.Caching;
 using Microsoft.Extensions.DependencyInjection;
 
 // CTMS client SDK - console walkthrough.
@@ -10,33 +10,33 @@ using Microsoft.Extensions.DependencyInjection;
 // Runs fully offline against an in-process fake API unless you point it at a real
 // CTMS instance:
 //
-//   CTMS_BASE_URL=http://localhost:5147 CTMS_PROJECT_ID=<guid> \
-//     CTMS_LOCALES=fr-CA,fr,en dotnet run --project samples/Ctms.ConsoleSample
+//   CTMS_BASE_URL=http://localhost:5147 CTMS_APPLICATION=icoach \
+//     CTMS_LANGUAGES=fr-CA,fr-FR,en-GB dotnet run --project samples/Ctms.ConsoleSample
 //
 // Demonstrates: prefetch, revalidation (304), offline replay against a dead URL,
-// and locale fallback-chain resolution.
+// and language fallback-chain resolution.
 
-var projectId = Environment.GetEnvironmentVariable("CTMS_PROJECT_ID") is { Length: > 0 } rawId
-    ? Guid.Parse(rawId)
-    : Guid.Parse("11111111-1111-1111-1111-111111111111");
+var application = Environment.GetEnvironmentVariable("CTMS_APPLICATION") is { Length: > 0 } rawApp
+    ? rawApp
+    : "icoach";
 
 var baseUrl = Environment.GetEnvironmentVariable("CTMS_BASE_URL");
-var locales = (Environment.GetEnvironmentVariable("CTMS_LOCALES") ?? "fr-CA,fr,en")
+var languages = (Environment.GetEnvironmentVariable("CTMS_LANGUAGES") ?? "fr-CA,fr-FR,en-GB")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-var cacheDir = Path.Combine(Path.GetTempPath(), "ctms-console-sample", projectId.ToString("D"));
+var cacheDir = Path.Combine(Path.GetTempPath(), "ctms-console-sample", application);
 Directory.CreateDirectory(cacheDir);
 Console.WriteLine($"Cache directory: {cacheDir}");
 
-// A fake in-process API so the sample runs with no server. It serves one bundle per
-// locale and honours If-None-Match with a 304.
-var fakeApi = new FakeCtmsHandler(projectId);
+// A fake in-process API so the sample runs with no server. It serves one flat
+// translation map per language and honours If-None-Match with a 304.
+var fakeApi = new FakeCtmsHandler(application);
 
 var services = new ServiceCollection();
 services.AddCtmsClient(options =>
 {
-    options.ProjectId = projectId;
-    options.DefaultLocale = "en";
+    options.Application = application;
+    options.DefaultLanguage = "en-GB";
     options.CacheDirectory = cacheDir;
     options.StalenessTtl = TimeSpan.Zero; // always revalidate so the 304 path is visible
     options.DiagnosticsLogger = Console.WriteLine;
@@ -56,26 +56,27 @@ using var provider = services.BuildServiceProvider();
 var client = provider.GetRequiredService<ICtmsClient>();
 
 Console.WriteLine("\n== 1. Prefetch ==");
-await client.PrefetchAsync(locales);
+await client.PrefetchAsync(languages);
 
 Console.WriteLine("\n== 2. Revalidation (immediate re-fetch -> 304 from the fake API) ==");
-var bundle = await client.GetBundleAsync(locales[0]);
-Console.WriteLine($"{bundle.LocaleCode} v{bundle.Version} etag={bundle.Etag[..8]} " +
-                  $"retrieved={bundle.RetrievedAt:HH:mm:ss} validated={bundle.LastValidatedAt:HH:mm:ss} stale={bundle.IsStale}");
+var set = await client.GetTranslationsAsync(languages[0]);
+Console.WriteLine($"{set.Application}/{set.Language}  {set.Entries.Count} keys  etag={Short(set.Etag)}  " +
+                  $"retrieved={set.RetrievedAt:HH:mm:ss} validated={set.LastValidatedAt:HH:mm:ss} stale={set.IsStale}");
 
-Console.WriteLine("\n== 3. Fallback chain (fr-CA -> fr -> en -> MissingKeyFallback) ==");
+Console.WriteLine("\n== 3. Fallback chain (fr-CA -> fr-FR -> en-GB -> MissingKeyFallback) ==");
 foreach (var key in new[] { "greeting", "checkout.button", "only.english", "totally.missing" })
 {
-    Console.WriteLine($"  Get(\"{key}\", \"fr-CA\") = \"{client.Get(key, "fr-CA", Array.Empty<string>())}\"" +
-                      $"   (nullable overload: {(client.Get(key, "fr-CA") is { } v ? $"\"{v}\"" : "null")})");
+    var guaranteed = client.Get(key, "fr-CA", "fr-FR");
+    var nullable = client.Get(key, "fr-CA") is { } v ? $"\"{v}\"" : "null";
+    Console.WriteLine($"  Get(\"{key}\", \"fr-CA\", \"fr-FR\") = \"{guaranteed}\"   (nullable overload: {nullable})");
 }
 
 Console.WriteLine("\n== 4. Offline replay (new client pointed at a dead URL, warm file cache) ==");
 var offlineServices = new ServiceCollection();
 offlineServices.AddCtmsClient(options =>
 {
-    options.ProjectId = projectId;
-    options.DefaultLocale = "en";
+    options.Application = application;
+    options.DefaultLanguage = "en-GB";
     options.CacheDirectory = cacheDir;
     options.RequestTimeout = TimeSpan.FromSeconds(2);
     options.DiagnosticsLogger = Console.WriteLine;
@@ -84,12 +85,12 @@ offlineServices.AddCtmsClient(options =>
 using var offlineProvider = offlineServices.BuildServiceProvider();
 var offlineClient = offlineProvider.GetRequiredService<ICtmsClient>();
 
-var offlineBundle = await offlineClient.GetBundleAsync(locales[0]);
-Console.WriteLine($"served {offlineBundle.LocaleCode} v{offlineBundle.Version} from cache, IsStale={offlineBundle.IsStale}");
+var offlineSet = await offlineClient.GetTranslationsAsync(languages[0]);
+Console.WriteLine($"served {offlineSet.Application}/{offlineSet.Language} from cache, IsStale={offlineSet.IsStale}");
 
 try
 {
-    await offlineClient.GetBundleAsync("de-DE-never-cached");
+    await offlineClient.GetTranslationsAsync("de-DE-never-cached");
 }
 catch (CtmsOfflineException ex)
 {
@@ -98,29 +99,31 @@ catch (CtmsOfflineException ex)
 
 Console.WriteLine("\nDone.");
 
+static string Short(string etag) => etag.Length <= 12 ? etag : etag[..12];
+
 // ---------------------------------------------------------------------------
 
-file sealed class FakeCtmsHandler(Guid projectId) : HttpMessageHandler
+file sealed class FakeCtmsHandler(string application) : HttpMessageHandler
 {
-    private readonly Dictionary<string, (int Version, Dictionary<string, string> Entries)> _bundles = new()
+    private readonly Dictionary<string, Dictionary<string, string>> _sets = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["fr"] = (3, new() { ["greeting"] = "Bonjour", ["checkout.button"] = "Payer" }),
-        ["fr-ca"] = (1, new() { ["greeting"] = "Salut" }),
-        ["en"] = (5, new() { ["greeting"] = "Hello", ["checkout.button"] = "Pay", ["only.english"] = "EN only" }),
+        ["fr-FR"] = new() { ["greeting"] = "Bonjour", ["checkout.button"] = "Payer" },
+        ["fr-CA"] = new() { ["greeting"] = "Salut" },
+        ["en-GB"] = new() { ["greeting"] = "Hello", ["checkout.button"] = "Pay", ["only.english"] = "EN only" },
     };
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var segments = request.RequestUri!.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        // api/projects/{id}/bundles/{locale}
-        var locale = Uri.UnescapeDataString(segments[^1]).ToLowerInvariant();
+        // api/translations/{application}/{language}
+        var language = Uri.UnescapeDataString(segments[^1]);
 
-        if (!_bundles.TryGetValue(locale, out var data))
+        if (!_sets.TryGetValue(language, out var translations))
         {
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            return Task.FromResult(Problem(HttpStatusCode.NotFound, "Resource not found", $"language '{language}' not enabled"));
         }
 
-        var etag = TranslationBundleEtag.Compute(data.Entries);
+        var etag = TranslationContentHash.Compute(translations);
 
         if (request.Headers.IfNoneMatch.Any(t => t.Tag == $"\"{etag}\"" || t.Tag == "*"))
         {
@@ -129,26 +132,29 @@ file sealed class FakeCtmsHandler(Guid projectId) : HttpMessageHandler
             return Task.FromResult(notModified);
         }
 
-        var dto = new
+        var payload = JsonSerializer.Serialize(new
         {
-            id = Guid.NewGuid(),
-            projectId,
-            localeCode = locale,
-            version = data.Version,
-            entries = data.Entries,
-            etag,
-            createdBy = "sample",
-            createdAt = DateTime.UtcNow,
-        };
+            project = application,
+            language,
+            translations,
+        });
 
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(JsonSerializer.Serialize(dto), Encoding.UTF8, "application/json"),
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
         };
         response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"{etag}\"");
         response.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
         return Task.FromResult(response);
     }
+
+    private static HttpResponseMessage Problem(HttpStatusCode status, string title, string detail) => new(status)
+    {
+        Content = new StringContent(
+            JsonSerializer.Serialize(new { title, detail, status = (int)status }),
+            Encoding.UTF8,
+            "application/problem+json"),
+    };
 }
 
 file sealed class DeadHandler : HttpMessageHandler
@@ -157,9 +163,9 @@ file sealed class DeadHandler : HttpMessageHandler
         => throw new HttpRequestException("connection refused (sample)");
 }
 
-// Mirrors CTMS.Domain.Translations.TranslationBundle.ComputeETag so the fake API
+// Mirrors CTMS.Application's TranslationContentHash.Compute so the fake API
 // produces server-compatible tags without referencing the backend.
-file static class TranslationBundleEtag
+file static class TranslationContentHash
 {
     public static string Compute(IReadOnlyDictionary<string, string> entries)
     {
@@ -169,7 +175,6 @@ file static class TranslationBundleEtag
             builder.Append(pair.Key).Append('\n').Append(pair.Value).Append('\n');
         }
 
-        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
-        return Convert.ToHexStringLower(hash);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
     }
 }

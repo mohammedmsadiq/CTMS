@@ -49,7 +49,7 @@ public sealed class CtmsApiFactory(
 
     /// <summary>An <see cref="HttpClient"/> that authenticates as <paramref name="roles"/> and
     /// carries <paramref name="actorName"/> as the token <c>name</c> claim. Distinct name from
-    /// <see cref="ClientAs(string[])"/> so a single-string call (<c>ClientAs("ctms.admin")</c>)
+    /// <see cref="ClientAs(string[])"/> so a single-string call (<c>ClientAs("TranslationAdministrator")</c>)
     /// is unambiguously a role, not an actor.</summary>
     public HttpClient ClientAsActor(string actorName, params string[] roles)
     {

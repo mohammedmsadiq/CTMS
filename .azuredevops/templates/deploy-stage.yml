@@ -1,73 +1,96 @@
 # -----------------------------------------------------------------------------
-# DISABLED deployment stage stub for CTMS -> Azure Container Apps.
+# Reusable DEPLOY STAGE for CTMS -> Azure Container Apps, one per environment
+# (Development / Test / Staging / Production).
 #
-# This template documents WHERE and HOW the deployment hangs off the pipeline
-# once the infrastructure is ready. It is wired with `condition: false` and
-# never runs. The Package stage already builds and pushes the image this stage
-# would deploy.
+# It runs `az deployment group create` against deploy/azure/main.bicep, pointing
+# `apiImage` at the tag the Package stage pushed to ACR, then smoke-tests
+# GET /health/ready against the deployment's `apiFqdn` output.
 #
-# It targets the infra workstream's Bicep at `deploy/azure/main.bicep`, whose
-# own README says: "CI/CD wiring (who runs az deployment group create / az acr
-# build) is owned by the cicd-docs workstream". That wiring is sketched below.
+# GATING
+#   * `deployEnabled` (param, default 'false') keeps the stage inert until the
+#     deploy/azure infra and the Azure DevOps Environments exist. Flip it per
+#     environment in azure-pipelines.yml (or in the `ctms-deploy` variable
+#     group) when ready. Nothing here needs to actually run for the pipeline to
+#     be valid.
+#   * The `deployment` job targets an Azure DevOps **Environment**
+#     (`environmentName`). Approvals and branch/exclusive-lock checks are
+#     configured on that Environment in the ADO UI — that is where the real
+#     Production approval lives. See docs/azure-devops.md.
+#   * `requireManualApproval: true` (Production) additionally adds an in-pipeline
+#     `ManualValidation` gate on an agentless job, so an approval step exists
+#     even before the Environment's checks are configured.
 #
-# The Bicep provisions ACR + user-assigned managed identity (AcrPull) + Key
-# Vault + Cosmos DB for MongoDB (RU serverless by default) + Azure Cache for
-# Redis + Log Analytics + a Container Apps environment + the API container app
-# (external ingress on 8080, /health + /health/ready probes). The container app
-# pulls its image via managed identity - no registry credentials - and reads its
-# Mongo/Redis connection strings from Key Vault references.
-#
-# TODO: create an Azure DevOps Environment matching `environmentName` with the
-#       approvals / branch checks production needs.
-# TODO: add an ARM / workload-identity service connection; put its name in a
-#       variable group and pass it as `azureServiceConnection`.
-# TODO: create a real per-environment parameters file (copy
-#       deploy/azure/parameters.example.json) and point `parametersFile` at it.
-# TODO: after the first deploy, seed the Key Vault secrets the Bicep references
-#       (`CtmsDatabase-ConnectionString`, `Redis-ConnectionString`) - see
-#       deploy/azure/README.md - then restart the container app revision.
-# TODO: flip `condition` to
-#       and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main')).
+# SECRETS
+#   None in YAML. `azureServiceConnection` is a service-connection *name*; the
+#   Bicep resolves Mongo/Redis connection strings from Key Vault references at
+#   runtime via the container app's managed identity (see docs/azure-deployment.md).
 # -----------------------------------------------------------------------------
 parameters:
+  - name: stageName
+    type: string
+  - name: displayName
+    type: string
   - name: dependsOn
     type: string
-    default: Package
   - name: environmentName
-    type: string
-    default: ctms-production
+    type: string          # Azure DevOps Environment name, e.g. ctms-production
+  - name: deployEnabled
+    type: string          # 'true' | 'false' (string so it can come from a variable)
+    default: 'false'
+  - name: requireManualApproval
+    type: boolean
+    default: false
   - name: azureServiceConnection
     type: string
-    default: "" # TODO: ARM service connection name (do NOT hard-code here)
+    default: ''            # ARM / workload-identity service connection name (ctms-deploy group)
   - name: resourceGroup
     type: string
-    default: rg-ctms-prod
+    default: ''
+  - name: bicepEnvironmentName
+    type: string           # main.bicep `environmentName` param: dev | test | prod
+    default: dev
   - name: bicepFile
     type: string
     default: deploy/azure/main.bicep
   - name: parametersFile
     type: string
-    default: deploy/azure/parameters.example.json # TODO: real per-env file
-  # Image coordinates - come from the ctms-acr variable group at the call site.
+    default: deploy/azure/parameters.example.json   # TODO: real per-env file
   - name: acrLoginServer
     type: string
-    default: "" # e.g. myregistry.azurecr.io
+    default: ''            # e.g. myregistry.azurecr.io (ctms-acr group)
   - name: imageRepository
     type: string
-    default: "" # e.g. ctms/api
+    default: ''            # e.g. ctms/api (ctms-acr group)
   - name: imageTag
     type: string
-    default: latest
+    default: $(Build.BuildNumber)
 
 stages:
-  - stage: Deploy
-    displayName: "Deploy to Azure Container Apps (disabled stub)"
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.displayName }}
     dependsOn: ${{ parameters.dependsOn }}
-    # TODO: enable on main once deploy/azure + the environment are ready.
-    condition: false
+    # Inert unless the caller opts this environment in.
+    condition: and(succeeded(), eq('${{ parameters.deployEnabled }}', 'true'))
     jobs:
+      - ${{ if parameters.requireManualApproval }}:
+          - job: approval
+            displayName: Manual approval
+            pool: server               # agentless — required by ManualValidation@0
+            timeoutInMinutes: 4320      # 3 days to approve
+            steps:
+              - task: ManualValidation@0
+                inputs:
+                  notifyUsers: ''
+                  instructions: >-
+                    Approve the ${{ parameters.displayName }} of CTMS
+                    $(Build.BuildNumber) (image
+                    ${{ parameters.acrLoginServer }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }}).
+                  onTimeout: reject
+
       - deployment: deploy_container_app
-        displayName: "az deployment group create (deploy/azure/main.bicep)"
+        displayName: az deployment group create (deploy/azure/main.bicep)
+        ${{ if parameters.requireManualApproval }}:
+          dependsOn: approval
         environment: ${{ parameters.environmentName }}
         pool:
           vmImage: ubuntu-latest
@@ -78,33 +101,39 @@ stages:
                 - checkout: self
 
                 - task: AzureCLI@2
-                  displayName: "Provision / update infra from Bicep"
+                  displayName: Provision / update infra from Bicep
                   inputs:
                     azureSubscription: ${{ parameters.azureServiceConnection }}
                     scriptType: bash
                     scriptLocation: inlineScript
                     inlineScript: |
                       set -euo pipefail
-                      # The Bicep owns the container app definition; redeploying
-                      # it with a new apiImage rolls the app to a new revision.
-                      # `apiImage` override lines up with a param in main.bicep.
+                      # Redeploying the Bicep with a new apiImage rolls the
+                      # container app to a new revision.
                       az deployment group create \
                         --resource-group "${{ parameters.resourceGroup }}" \
+                        --name "ctms-$(Build.BuildNumber)" \
                         --template-file "${{ parameters.bicepFile }}" \
                         --parameters "@${{ parameters.parametersFile }}" \
+                        --parameters environmentName="${{ parameters.bicepEnvironmentName }}" \
                         --parameters apiImage="${{ parameters.acrLoginServer }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }}"
 
                 - task: AzureCLI@2
-                  displayName: "Smoke test GET /health/ready"
+                  displayName: Smoke test GET /health/ready
                   inputs:
                     azureSubscription: ${{ parameters.azureServiceConnection }}
                     scriptType: bash
                     scriptLocation: inlineScript
                     inlineScript: |
                       set -euo pipefail
-                      # apiFqdn is a documented output of main.bicep.
                       FQDN=$(az deployment group show \
                         --resource-group "${{ parameters.resourceGroup }}" \
-                        --name main \
+                        --name "ctms-$(Build.BuildNumber)" \
                         --query 'properties.outputs.apiFqdn.value' -o tsv)
-                      curl -fsS "https://${FQDN}/health/ready"
+                      echo "Probing https://${FQDN}/health/ready"
+                      for i in $(seq 1 10); do
+                        if curl -fsS "https://${FQDN}/health/ready"; then exit 0; fi
+                        echo "not ready yet (attempt $i); sleeping 15s"; sleep 15
+                      done
+                      echo "##vso[task.logissue type=error]/health/ready never returned 200"
+                      exit 1

@@ -61,8 +61,11 @@ app.WarnIfAuthDisabled();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
-// Reject oversized bodies with 413 before anything reads them.
-app.UseCtmsRequestBodySizeLimit(app.Configuration.MaxRequestBodyBytes());
+// Reject oversized bodies with 413 before anything reads them. The bulk-import endpoint opts in
+// to a larger ceiling (Limits:MaxImportBodyBytes) through endpoint metadata.
+app.UseCtmsRequestBodySizeLimit(
+    app.Configuration.MaxRequestBodyBytes(),
+    app.Configuration.MaxImportBodyBytes());
 
 // One structured line per request (method, path, status, elapsed); /health* excluded.
 app.UseCtmsHttpLogging();
@@ -100,17 +103,21 @@ if (app.Configuration.RateLimitingEnabled())
 
 app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false })
     .DisableRateLimiting();
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false })
+    .DisableRateLimiting();
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = registration => registration.Tags.Contains("ready"),
 }).DisableRateLimiting();
 
 app.MapProjectEndpoints();
-app.MapLocaleEndpoints();
+app.MapLanguageEndpoints();
 app.MapTranslationKeyEndpoints();
 app.MapTranslationStringEndpoints();
 app.MapReviewEndpoints();
-app.MapBundleEndpoints();
+app.MapBulkReviewEndpoints();
+app.MapTranslationImportEndpoints();
+app.MapTranslationEndpoints();
 app.MapAuditEndpoints();
 
 app.Run();

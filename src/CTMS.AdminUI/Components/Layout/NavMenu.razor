@@ -17,39 +17,54 @@
                 <span class="bi bi-folder2-open-nav-menu" aria-hidden="true"></span> Projects
             </NavLink>
         </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="languages" Match="NavLinkMatch.Prefix">
+                <span class="bi bi-globe2-nav-menu" aria-hidden="true"></span> Languages
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="dashboard" Match="NavLinkMatch.Prefix">
+                <span class="bi bi-info-circle-nav-menu" aria-hidden="true"></span> Dashboard
+            </NavLink>
+        </div>
 
-        @if (_projectId is { } projectId)
+        @if (_projectCode is { } code)
         {
             <div class="nav-context px-3 pt-3 pb-1 text-uppercase small">
-                @(_projectName ?? "Project")
+                @(_projectName ?? code)
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"projects/{projectId}")" Match="NavLinkMatch.All">
+                <NavLink class="nav-link" href="@($"projects/{code}")" Match="NavLinkMatch.All">
                     <span class="bi bi-info-circle-nav-menu" aria-hidden="true"></span> Overview
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"projects/{projectId}/locales")">
-                    <span class="bi bi-globe2-nav-menu" aria-hidden="true"></span> Locales
+                <NavLink class="nav-link" href="@($"projects/{code}/grid")">
+                    <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Grid
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"projects/{projectId}/keys")">
-                    <span class="bi bi-key-nav-menu" aria-hidden="true"></span> Keys
+                <NavLink class="nav-link" href="@($"projects/{code}/import")">
+                    <span class="bi bi-box-nav-menu" aria-hidden="true"></span> Import
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"projects/{projectId}/review")">
-                    <span class="bi bi-check2-square-nav-menu" aria-hidden="true"></span> Review queue
+                <NavLink class="nav-link" href="@($"projects/{code}/review")">
+                    <span class="bi bi-check2-square-nav-menu" aria-hidden="true"></span> Review
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"projects/{projectId}/bundles")">
-                    <span class="bi bi-box-nav-menu" aria-hidden="true"></span> Bundles
+                <NavLink class="nav-link" href="@($"projects/{code}/missing")">
+                    <span class="bi bi-key-nav-menu" aria-hidden="true"></span> Missing
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="@($"projects/{projectId}/history")">
+                <NavLink class="nav-link" href="@($"projects/{code}/publish")">
+                    <span class="bi bi-box-nav-menu" aria-hidden="true"></span> Publish
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="@($"projects/{code}/history")">
                     <span class="bi bi-clock-history-nav-menu" aria-hidden="true"></span> History
                 </NavLink>
             </div>
@@ -58,7 +73,7 @@
 </div>
 
 @code {
-    private Guid? _projectId;
+    private string? _projectCode;
     private string? _projectName;
 
     protected override void OnInitialized()
@@ -72,18 +87,18 @@
 
     private async Task SyncToLocationAsync()
     {
-        var previous = _projectId;
-        _projectId = ExtractProjectId(Nav.ToBaseRelativePath(Nav.Uri));
+        var previous = _projectCode;
+        _projectCode = ExtractProjectCode(Nav.ToBaseRelativePath(Nav.Uri));
 
-        if (_projectId != previous)
+        if (!string.Equals(_projectCode, previous, StringComparison.Ordinal))
         {
             _projectName = null;
             await InvokeAsync(StateHasChanged);
 
-            if (_projectId is { } id)
+            if (_projectCode is { } code)
             {
-                var result = await Api.GetProjectAsync(id);
-                if (result.IsSuccess && _projectId == id)
+                var result = await Api.GetProjectAsync(code);
+                if (result.IsSuccess && string.Equals(_projectCode, code, StringComparison.Ordinal))
                 {
                     _projectName = result.Value!.Name;
                     await InvokeAsync(StateHasChanged);
@@ -92,18 +107,13 @@
         }
     }
 
-    private static Guid? ExtractProjectId(string relativePath)
+    private static string? ExtractProjectCode(string relativePath)
     {
         var path = relativePath.Split('?', '#')[0];
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length >= 2 &&
-            segments[0].Equals("projects", StringComparison.OrdinalIgnoreCase) &&
-            Guid.TryParse(segments[1], out var id))
-        {
-            return id;
-        }
-
-        return null;
+        return segments.Length >= 2 && segments[0].Equals("projects", StringComparison.OrdinalIgnoreCase)
+            ? Uri.UnescapeDataString(segments[1])
+            : null;
     }
 
     public void Dispose() => Nav.LocationChanged -= OnLocationChanged;

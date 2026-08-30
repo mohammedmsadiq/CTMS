@@ -53,10 +53,10 @@ internal static class RateLimitingSetup
 
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
             {
-                if (IsBundleDelivery(context.Request))
+                if (IsTranslationsDelivery(context.Request))
                 {
                     return RateLimitPartition.GetFixedWindowLimiter(
-                        $"bundle:{RemoteIp(context)}",
+                        $"delivery:{RemoteIp(context)}",
                         _ => new FixedWindowRateLimiterOptions
                         {
                             PermitLimit = bundlePermit,
@@ -102,10 +102,11 @@ internal static class RateLimitingSetup
         return services;
     }
 
-    private static bool IsBundleDelivery(HttpRequest request) =>
+    // The anonymous client delivery path: GET /api/translations/{application}/{language}.
+    private static bool IsTranslationsDelivery(HttpRequest request) =>
         HttpMethods.IsGet(request.Method)
         && request.Path.HasValue
-        && request.Path.Value!.Contains("/bundles/", StringComparison.OrdinalIgnoreCase);
+        && request.Path.Value!.StartsWith("/api/translations/", StringComparison.OrdinalIgnoreCase);
 
     private static string PartitionKey(HttpContext context)
     {

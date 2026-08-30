@@ -4,14 +4,8 @@ namespace CTMS.AdminUI.ApiContracts;
 /// A normalised API failure. Built from an RFC 7807 <c>problem+json</c> body when the
 /// server sent one, otherwise synthesised from the transport error / status code.
 /// </summary>
-public sealed record ApiError(
-    int Status,
-    string Title,
-    string? Detail,
-    long? CurrentVersion = null)
+public sealed record ApiError(int Status, string Title, string? Detail)
 {
-    public bool IsConcurrencyConflict => Status == 409 && CurrentVersion is not null;
-
     public string Message => string.IsNullOrWhiteSpace(Detail) ? Title : Detail!;
 
     public static ApiError Transport(string detail) =>

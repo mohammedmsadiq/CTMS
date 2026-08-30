@@ -17,7 +17,7 @@
     <!-- Packaging (published by the release pipeline; see docs/client-sdk.md). -->
     <IsPackable>true</IsPackable>
     <PackageId>CTMS.Client</PackageId>
-    <Description>Client SDK for the Centralised Translation Management System: revalidating bundle fetch, offline cache, and locale fallback-chain resolution.</Description>
+    <Description>Client SDK for the Centralised Translation Management System: revalidating translation fetch, offline cache, and language fallback-chain resolution.</Description>
     <PackageTags>ctms;i18n;localization;translation;sdk</PackageTags>
     <!--
       XML-doc generation is intentionally off: the repo builds with

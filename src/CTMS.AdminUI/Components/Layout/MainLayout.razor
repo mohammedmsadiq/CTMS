@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@inject IConfiguration Configuration
 
 <div class="page">
     <div class="sidebar">
@@ -9,24 +10,40 @@
         <div class="top-row px-4">
             <span class="app-title">CTMS Admin</span>
             <div class="flex-grow-1"></div>
-            <AuthorizeView>
-                <Authorized>
-                    <span class="user-stub">
-                        <span class="bi bi-person-circle" aria-hidden="true"></span>
-                        @(context.User.Identity?.Name ?? CurrentUser.DisplayName)
-                    </span>
-                    <a class="ms-3 small" href="MicrosoftIdentity/Account/SignOut">Sign out</a>
-                </Authorized>
-                <NotAuthorized>
-                    <a class="small" href="MicrosoftIdentity/Account/SignIn">Sign in</a>
-                </NotAuthorized>
-            </AuthorizeView>
+            <ThemeToggle />
+            @if (_authEnabled)
+            {
+                <AuthorizeView>
+                    <Authorized>
+                        <span class="user-stub">
+                            <span class="bi bi-person-circle" aria-hidden="true"></span>
+                            @(context.User.Identity?.Name ?? CurrentUser.DisplayName)
+                        </span>
+                        <a class="ms-3 small" href="MicrosoftIdentity/Account/SignOut">Sign out</a>
+                    </Authorized>
+                    <NotAuthorized>
+                        <a class="small" href="MicrosoftIdentity/Account/SignIn">Sign in</a>
+                    </NotAuthorized>
+                </AuthorizeView>
+            }
+            else
+            {
+                <span class="user-stub">
+                    <span class="bi bi-person-circle" aria-hidden="true"></span>
+                    @CurrentUser.DisplayName
+                </span>
+                <span class="badge text-bg-warning-subtle border ms-2" title="Auth:Enabled=false — every visitor has all roles and the API is called without a token.">
+                    Auth disabled (dev)
+                </span>
+            }
         </div>
 
         <article class="content px-4">
             @Body
         </article>
     </main>
+
+    <ToastHost />
 </div>
 
 <div id="blazor-error-ui" data-nosnippet>
@@ -37,4 +54,9 @@
 
 @code {
     [Inject] private CurrentUser CurrentUser { get; set; } = default!;
+
+    private bool _authEnabled;
+
+    protected override void OnInitialized()
+        => _authEnabled = Configuration.GetValue("Auth:Enabled", true);
 }

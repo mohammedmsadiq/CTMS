@@ -1,4 +1,4 @@
-@page "/projects/{ProjectId:guid}/history"
+@page "/projects/{Code}/history"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
 
@@ -7,20 +7,16 @@
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
         <li class="breadcrumb-item"><a href="projects">Projects</a></li>
-        <li class="breadcrumb-item"><a href="@($"projects/{ProjectId}")">Project</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
         <li class="breadcrumb-item active" aria-current="page">History</li>
     </ol>
 </nav>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">Audit / history</h1>
-    <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_loading">Refresh</button>
-</div>
-
-<p class="text-muted small">
-    Append-only trail across every audited entity in this project — translation strings and
-    published bundles. Newest first.
-</p>
+<PageHeader Title="History" Lead="@($"Append-only audit trail for {Code}. Newest first.")">
+    <Actions>
+        <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_loading">Refresh</button>
+    </Actions>
+</PageHeader>
 
 @if (_loading)
 {
@@ -28,12 +24,11 @@
 }
 else if (_loadError is not null)
 {
-    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+    <ErrorAlert Error="_loadError" OnRetry="ReloadAsync" />
 }
 else if (_page is { Total: 0 })
 {
-    <EmptyState Title="No history yet"
-                Hint="Actions on strings and bundles will show up here." />
+    <EmptyState Title="No history yet" Hint="Edits and review actions on strings will show up here." />
 }
 else if (_page is not null)
 {
@@ -50,15 +45,34 @@ else if (_page is not null)
                 </tr>
             </thead>
             <tbody>
-                @foreach (var entry in _page.Items)
+                @foreach (var e in _page.Items)
                 {
                     <tr>
-                        <td class="text-nowrap">@entry.Timestamp.ToLocalTime().ToString("g")</td>
-                        <td>@entry.EntityType</td>
-                        <td>@entry.Action</td>
-                        <td class="text-nowrap"><StateTransition From="@entry.FromState" To="@entry.ToState" /></td>
-                        <td>@entry.Actor</td>
-                        <td>@(string.IsNullOrWhiteSpace(entry.Detail) ? "—" : entry.Detail)</td>
+                        <td class="text-nowrap">@e.Timestamp.ToLocalTime().ToString("g")</td>
+                        <td>@e.EntityType</td>
+                        <td>@e.Action</td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(e.FromState) || !string.IsNullOrEmpty(e.ToState))
+                            {
+                                <span class="text-nowrap"><StateTransition From="@e.FromState" To="@e.ToState" /></span>
+                            }
+                            else if (!string.IsNullOrEmpty(e.OldValue) || !string.IsNullOrEmpty(e.NewValue))
+                            {
+                                <span class="d-inline-block text-truncate align-bottom" style="max-width: 14rem;">
+                                    @(string.IsNullOrEmpty(e.OldValue) ? "∅" : e.OldValue)
+                                </span>
+                                <span class="mx-1" aria-hidden="true">→</span>
+                                <span class="d-inline-block text-truncate align-bottom" style="max-width: 14rem;">
+                                    @(string.IsNullOrEmpty(e.NewValue) ? "∅" : e.NewValue)
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">—</span>
+                            }
+                        </td>
+                        <td>@e.Actor</td>
+                        <td>@(string.IsNullOrWhiteSpace(e.Detail) ? "—" : e.Detail)</td>
                     </tr>
                 }
             </tbody>
@@ -67,7 +81,7 @@ else if (_page is not null)
 
     <div class="d-flex justify-content-between align-items-center">
         <span class="text-muted small">
-            Showing @(_skip + 1)–@Math.Min(_skip + _take, _page.Total) of @_page.Total
+            Showing @(_page.Total == 0 ? 0 : _skip + 1)–@Math.Min(_skip + _take, _page.Total) of @_page.Total
         </span>
         <div class="btn-group">
             <button class="btn btn-outline-secondary btn-sm" @onclick="PrevPage" disabled="@(_skip == 0 || _loading)">Previous</button>
@@ -77,7 +91,7 @@ else if (_page is not null)
 }
 
 @code {
-    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public string Code { get; set; } = "";
 
     private const int _take = 25;
     private int _skip;
@@ -98,11 +112,11 @@ else if (_page is not null)
         _loadError = null;
         StateHasChanged();
 
-        var result = await Api.GetProjectHistoryAsync(ProjectId, _skip, _take);
+        var result = await Api.GetProjectHistoryAsync(Code, _skip, _take);
         if (result.IsSuccess)
         {
             _page = result.Value;
-            if (_skip > 0 && _page!.Items.Count == 0)
+            if (_skip > 0 && _page!.Items.Count == 0 && _page.Total > 0)
             {
                 _skip = Math.Max(0, _skip - _take);
                 _loading = false;
@@ -114,8 +128,13 @@ else if (_page is not null)
         {
             _loadError = result.Error;
         }
-
         _loading = false;
+    }
+
+    private Task ReloadAsync()
+    {
+        _skip = 0;
+        return LoadAsync();
     }
 
     private Task NextPage()

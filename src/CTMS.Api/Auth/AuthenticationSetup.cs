@@ -8,9 +8,11 @@ namespace CTMS.Api.Auth;
 /// Wires authentication + authorization for the API. Two modes, selected by the
 /// <c>Auth:Enabled</c> configuration flag (default <c>true</c>):
 /// <list type="bullet">
-///   <item><b>enabled</b> — validate Entra ID JWT bearer tokens (<c>AzureAd</c> section).</item>
+///   <item><b>enabled</b> — validate Entra ID JWT bearer tokens (<c>AzureAd</c> section) as the
+///   default scheme. Every CTMS policy requires one of the <see cref="AuthRoles"/>.</item>
 ///   <item><b>disabled</b> — register <see cref="DevBypassAuthHandler"/> so local runs and the
-///   test suite work with no IdP. Refused outright under <c>Production</c>.</item>
+///   test suite work with no IdP. Refused outright under <c>Production</c>. The bypass principal
+///   already holds every role.</item>
 /// </list>
 /// </summary>
 public static class AuthenticationSetup

@@ -14,52 +14,83 @@ public sealed class ProjectServiceTests : IDisposable
     private ProjectService Service => _harness.ProjectService;
 
     [Fact]
-    public async Task CreateAsync_persists_the_project_and_derives_a_slug_from_the_name()
+    public async Task CreateAsync_persists_the_application_and_derives_a_code_from_the_name()
     {
-        var created = await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en"));
+        var created = await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en-GB"));
 
-        Assert.NotEqual(Guid.Empty, created.Id);
-        Assert.Equal("acme-web", created.Slug);
+        Assert.Equal("acme-web", created.Code);
+        Assert.False(created.IsCommon);
+        Assert.True(created.Active);
         Assert.NotEqual(default, created.CreatedAt);
 
-        var persisted = Assert.Single(await _harness.Projects.ListAsync());
+        var persisted = Assert.Single(await _harness.Projects.ListAsync(includeInactive: true));
         Assert.Equal("Acme Web", persisted.Name);
-        Assert.Equal("en", persisted.BaseLocaleCode);
-        Assert.Equal(created.Id, persisted.Id);
+        Assert.Equal("en-GB", persisted.BaseLanguageCode);
     }
 
     [Fact]
-    public async Task CreateAsync_rejects_a_duplicate_slug()
+    public async Task CreateAsync_rejects_a_duplicate_code()
     {
-        await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en"));
+        await Service.CreateAsync(new CreateProjectRequest("Acme Web", "en-GB"));
 
         var exception = await Assert.ThrowsAsync<SlugAlreadyInUseException>(
-            () => Service.CreateAsync(new CreateProjectRequest("  ACME   Web  ", "fr")));
+            () => Service.CreateAsync(new CreateProjectRequest("  ACME   Web  ", "fr-FR")));
 
         Assert.Equal("acme-web", exception.Slug);
-        Assert.Single(await _harness.Projects.ListAsync());
+        Assert.Single(await _harness.Projects.ListAsync(includeInactive: true));
     }
 
     [Fact]
-    public async Task CreateAsync_honours_an_explicit_slug()
+    public async Task CreateAsync_can_mark_an_application_shared()
     {
         var created = await Service.CreateAsync(
-            new CreateProjectRequest("Acme Web", "en", Slug: "Marketing Site"));
+            new CreateProjectRequest("Common", "en-GB", IsCommon: true));
 
-        Assert.Equal("marketing-site", created.Slug);
+        Assert.True(created.IsCommon);
     }
 
     [Fact]
     public async Task CreateAsync_rejects_a_blank_name()
     {
         await Assert.ThrowsAsync<ValidationException>(
-            () => Service.CreateAsync(new CreateProjectRequest("   ", "en")));
+            () => Service.CreateAsync(new CreateProjectRequest("   ", "en-GB")));
     }
 
     [Fact]
-    public async Task GetAsync_returns_null_for_an_unknown_id()
+    public async Task CreateAsync_with_enabled_languages_rejects_an_unknown_language()
     {
-        Assert.Null(await Service.GetAsync(Guid.NewGuid()));
+        await Assert.ThrowsAsync<ValidationException>(
+            () => Service.CreateAsync(new CreateProjectRequest(
+                "Acme", "en-GB", EnabledLanguageCodes: ["en-GB"])));
+    }
+
+    [Fact]
+    public async Task EnableLanguageAsync_adds_an_active_language_to_the_enabled_set()
+    {
+        await Seed.LanguageAsync(_harness, "en-GB");
+        await Seed.LanguageAsync(_harness, "fr-FR");
+        await Service.CreateAsync(new CreateProjectRequest("Acme", "en-GB", EnabledLanguageCodes: ["en-GB"]));
+
+        var updated = await Service.EnableLanguageAsync("acme", "fr-FR");
+
+        Assert.NotNull(updated);
+        Assert.Equal(["en-GB", "fr-FR"], updated!.EnabledLanguageCodes);
+    }
+
+    [Fact]
+    public async Task EnableLanguageAsync_rejects_an_inactive_language()
+    {
+        await Seed.LanguageAsync(_harness, "en-GB");
+        await Seed.LanguageAsync(_harness, "de-DE", active: false);
+        await Service.CreateAsync(new CreateProjectRequest("Acme", "en-GB"));
+
+        await Assert.ThrowsAsync<ValidationException>(() => Service.EnableLanguageAsync("acme", "de-DE"));
+    }
+
+    [Fact]
+    public async Task GetAsync_returns_null_for_an_unknown_code()
+    {
+        Assert.Null(await Service.GetAsync("nope"));
     }
 
     public void Dispose() => _harness.Dispose();

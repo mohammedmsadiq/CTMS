@@ -1,0 +1,279 @@
+@page "/languages"
+@using System.ComponentModel.DataAnnotations
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+
+<PageTitle>Languages — CTMS Admin</PageTitle>
+
+<PageHeader Title="Languages"
+           Lead="The global catalogue. Languages are shared across every project; enable them per project from its detail page. There is no delete — set a language inactive instead.">
+    <Actions>
+        <div class="form-check mb-0 me-2 align-self-center">
+            <input class="form-check-input" type="checkbox" id="incInactive"
+                   checked="@_includeInactive" @onchange="ToggleInactiveAsync" />
+            <label class="form-check-label small" for="incInactive">Show inactive</label>
+        </div>
+        <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent">
+            <button class="btn btn-primary" @onclick="() => _showCreate = !_showCreate">
+                @(_showCreate ? "Close" : "Add language")
+            </button>
+        </AuthorizeView>
+    </Actions>
+</PageHeader>
+
+@if (_showCreate)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <EditForm Model="_form" OnValidSubmit="CreateAsync">
+                <DataAnnotationsValidator />
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label" for="l-code">Code</label>
+                        <InputText id="l-code" class="form-control" placeholder="pt-BR" @bind-Value="_form.Code" />
+                        <ValidationMessage For="() => _form.Code" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="l-name">Name</label>
+                        <InputText id="l-name" class="form-control" placeholder="Portuguese (Brazil)" @bind-Value="_form.Name" />
+                        <ValidationMessage For="() => _form.Name" />
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="l-fb">Fallback <span class="text-muted">(opt.)</span></label>
+                        <InputText id="l-fb" class="form-control" placeholder="en-GB" @bind-Value="_form.FallbackCode" />
+                        <ValidationMessage For="() => _form.FallbackCode" />
+                    </div>
+                    <div class="col-md-2 form-check ms-2">
+                        <InputCheckbox id="l-rtl" class="form-check-input" @bind-Value="_form.IsRtl" />
+                        <label class="form-check-label" for="l-rtl">Right-to-left</label>
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary w-100" disabled="@_saving">Add</button>
+                    </div>
+                </div>
+                <ErrorAlert Error="_createError" />
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading languages…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_languages is { Count: 0 })
+{
+    <EmptyState Title="No languages" Hint="Add a language to the catalogue." />
+}
+else if (_languages is not null)
+{
+    <ErrorAlert Error="_rowError" />
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Code</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Fallback</th>
+                    <th scope="col">RTL</th>
+                    <th scope="col">Active</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var lang in _languages)
+                {
+                    var editing = _editingCode == lang.Code;
+                    <tr>
+                        <td><code>@lang.Code</code></td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input class="form-control form-control-sm" @bind="_editName" aria-label="Name" />
+                            }
+                            else
+                            {
+                                @lang.Name
+                            }
+                        </td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input class="form-control form-control-sm" @bind="_editFallback"
+                                       placeholder="none" aria-label="Fallback code" style="max-width: 8rem;" />
+                            }
+                            else
+                            {
+                                @(string.IsNullOrWhiteSpace(lang.FallbackCode) ? "—" : lang.FallbackCode)
+                            }
+                        </td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input type="checkbox" class="form-check-input" @bind="_editRtl" aria-label="Right-to-left" />
+                            }
+                            else
+                            {
+                                @(lang.IsRtl ? "Yes" : "No")
+                            }
+                        </td>
+                        <td>
+                            @if (editing)
+                            {
+                                <input type="checkbox" class="form-check-input" @bind="_editActive" aria-label="Active" />
+                            }
+                            else if (lang.Active)
+                            {
+                                <span class="badge text-bg-success">Active</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Inactive</span>
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
+                                @if (editing)
+                                {
+                                    <button class="btn btn-sm btn-primary" @onclick="() => SaveEditAsync(lang)" disabled="@_saving">Save</button>
+                                    <button class="btn btn-sm btn-link" @onclick="() => _editingCode = null" disabled="@_saving">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(lang)">Edit</button>
+                                }
+                            </AuthorizeView>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showCreate;
+    private bool _includeInactive = true;
+    private ApiError? _loadError;
+    private ApiError? _createError;
+    private ApiError? _rowError;
+    private IReadOnlyList<LanguageDto>? _languages;
+    private readonly CreateLanguageForm _form = new();
+
+    private string? _editingCode;
+    private string _editName = "";
+    private string _editFallback = "";
+    private bool _editRtl;
+    private bool _editActive;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _editingCode = null;
+        var result = await Api.GetLanguagesAsync(_includeInactive);
+        if (result.IsSuccess)
+        {
+            _languages = result.Value;
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private Task ToggleInactiveAsync(ChangeEventArgs e)
+    {
+        _includeInactive = (bool)e.Value!;
+        return LoadAsync();
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        _createError = null;
+        var result = await Api.CreateLanguageAsync(new CreateLanguageRequest(
+            _form.Code.Trim(),
+            _form.Name.Trim(),
+            string.IsNullOrWhiteSpace(_form.FallbackCode) ? null : _form.FallbackCode.Trim(),
+            _form.IsRtl));
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _form.Reset();
+            _showCreate = false;
+            await LoadAsync();
+        }
+        else
+        {
+            _createError = result.Error;
+        }
+    }
+
+    private void BeginEdit(LanguageDto lang)
+    {
+        _rowError = null;
+        _editingCode = lang.Code;
+        _editName = lang.Name;
+        _editFallback = lang.FallbackCode ?? "";
+        _editRtl = lang.IsRtl;
+        _editActive = lang.Active;
+    }
+
+    private async Task SaveEditAsync(LanguageDto lang)
+    {
+        _saving = true;
+        _rowError = null;
+        // "" clears the fallback via PATCH; null would leave it unchanged.
+        var request = new UpdateLanguageRequest(
+            Name: _editName.Trim(),
+            FallbackCode: _editFallback.Trim(),
+            IsRtl: _editRtl,
+            Active: _editActive);
+        var result = await Api.UpdateLanguageAsync(lang.Code, request);
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _editingCode = null;
+            await LoadAsync();
+        }
+        else
+        {
+            _rowError = result.Error;
+        }
+    }
+
+    private sealed class CreateLanguageForm
+    {
+        [Required, RegularExpression("^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$", ErrorMessage = "Looks like a BCP-47 code, e.g. pt-BR.")]
+        public string Code { get; set; } = "";
+
+        [Required, StringLength(100, MinimumLength = 1)]
+        public string Name { get; set; } = "";
+
+        [RegularExpression("^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$", ErrorMessage = "Looks like a BCP-47 code, e.g. en-GB.")]
+        [Display(Name = "Fallback code")]
+        public string? FallbackCode { get; set; }
+
+        public bool IsRtl { get; set; }
+
+        public void Reset()
+        {
+            Code = "";
+            Name = "";
+            FallbackCode = null;
+            IsRtl = false;
+        }
+    }
+}

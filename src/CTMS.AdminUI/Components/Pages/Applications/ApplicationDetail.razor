@@ -1,0 +1,339 @@
+@page "/projects/{Code}"
+@using System.ComponentModel.DataAnnotations
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+
+<PageTitle>@(_project?.Name ?? "Project") — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item active" aria-current="page">@(_project?.Name ?? Code)</li>
+    </ol>
+</nav>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading project…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_project is not null)
+{
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h1 class="h3 mb-0">@_project.Name</h1>
+        <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent">
+            <button class="btn btn-outline-secondary" @onclick="ToggleEdit">@(_editing ? "Close" : "Edit")</button>
+        </AuthorizeView>
+    </div>
+
+    @if (_editing)
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                    <DataAnnotationsValidator />
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="e-name">Name</label>
+                            <InputText id="e-name" class="form-control" @bind-Value="_form.Name" />
+                            <ValidationMessage For="() => _form.Name" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="e-base">Base language</label>
+                            <InputSelect id="e-base" class="form-select" @bind-Value="_form.BaseLanguageCode">
+                                @foreach (var lang in _languages ?? Array.Empty<LanguageDto>())
+                                {
+                                    <option value="@lang.Code">@lang.Name (@lang.Code)</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="col-md-12">
+                            <label class="form-label" for="e-desc">Description</label>
+                            <InputText id="e-desc" class="form-control" @bind-Value="_form.Description" />
+                        </div>
+                        <div class="col-auto form-check ms-2 mt-2">
+                            <InputCheckbox id="e-common" class="form-check-input" @bind-Value="_form.IsCommon" />
+                            <label class="form-check-label" for="e-common">Common</label>
+                        </div>
+                        <div class="col-auto form-check ms-2 mt-2">
+                            <InputCheckbox id="e-active" class="form-check-input" @bind-Value="_form.Active" />
+                            <label class="form-check-label" for="e-active">Active</label>
+                        </div>
+                    </div>
+                    <ErrorAlert Error="_saveError" />
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary" disabled="@_saving">
+                            @if (_saving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                            }
+                            Save
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    }
+
+    <dl class="row mt-3">
+        <dt class="col-sm-3">Code</dt>
+        <dd class="col-sm-9"><code>@_project.Code</code></dd>
+
+        <dt class="col-sm-3">Base language</dt>
+        <dd class="col-sm-9">@_project.BaseLanguageCode</dd>
+
+        <dt class="col-sm-3">Kind</dt>
+        <dd class="col-sm-9">@(_project.IsCommon ? "Common" : "Standalone")</dd>
+
+        <dt class="col-sm-3">Active</dt>
+        <dd class="col-sm-9">@(_project.Active ? "Yes" : "No")</dd>
+
+        <dt class="col-sm-3">Description</dt>
+        <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(_project.Description) ? "—" : _project.Description)</dd>
+
+        <dt class="col-sm-3">Created</dt>
+        <dd class="col-sm-9">@_project.CreatedAt.ToLocalTime().ToString("f")</dd>
+
+        <dt class="col-sm-3">Updated</dt>
+        <dd class="col-sm-9">@_project.UpdatedAt.ToLocalTime().ToString("f")</dd>
+    </dl>
+
+    <div class="row g-3 mt-1">
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/grid")">
+                <div class="card-body">
+                    <h2 class="h5">Translation grid</h2>
+                    <p class="text-muted mb-0 small">Add keys and edit every value across every enabled language.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/import")">
+                <div class="card-body">
+                    <h2 class="h5">Import</h2>
+                    <p class="text-muted mb-0 small">Bulk-load JSON or flat key=value for one language.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/review")">
+                <div class="card-body">
+                    <h2 class="h5">Review queue</h2>
+                    <p class="text-muted mb-0 small">Approve or reject strings awaiting review.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/missing")">
+                <div class="card-body">
+                    <h2 class="h5">Missing translations</h2>
+                    <p class="text-muted mb-0 small">Keys with a gap in one or more languages.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/publish")">
+                <div class="card-body">
+                    <h2 class="h5">Publish</h2>
+                    <p class="text-muted mb-0 small">Promote approved strings and preview delivery.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a class="card text-decoration-none h-100" href="@($"projects/{Code}/history")">
+                <div class="card-body">
+                    <h2 class="h5">History</h2>
+                    <p class="text-muted mb-0 small">The append-only audit trail for this project.</p>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <h2 class="h4 mt-5">Languages</h2>
+    <p class="text-muted small">
+        Tick a language to add it to <code>@_project.Code</code>'s enabled set; untick to remove it.
+        Only enabled languages get grid columns and delivery.
+    </p>
+    <ErrorAlert Error="_langError" />
+
+    @if (_languages is null)
+    {
+        <LoadingSpinner Message="Loading languages…" />
+    }
+    else
+    {
+        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
+            @foreach (var lang in _languages)
+            {
+                var enabled = _project.EnabledLanguageCodes.Contains(lang.Code, StringComparer.OrdinalIgnoreCase);
+                var isBase = string.Equals(lang.Code, _project.BaseLanguageCode, StringComparison.OrdinalIgnoreCase);
+                <div class="col">
+                    <div class="form-check">
+                        <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
+                            <Authorized>
+                                <input class="form-check-input" type="checkbox" id="@($"lang-{lang.Code}")"
+                                       checked="@enabled"
+                                       disabled="@(_langBusy == lang.Code || isBase)"
+                                       @onchange="e => ToggleLanguageAsync(lang.Code, (bool)e.Value!)" />
+                            </Authorized>
+                            <NotAuthorized>
+                                <input class="form-check-input" type="checkbox" id="@($"lang-{lang.Code}")"
+                                       checked="@enabled" disabled />
+                            </NotAuthorized>
+                        </AuthorizeView>
+                        <label class="form-check-label" for="@($"lang-{lang.Code}")">
+                            @lang.Name <code>@lang.Code</code>
+                            @if (lang.IsRtl)
+                            {
+                                <span class="badge text-bg-light ms-1">RTL</span>
+                            }
+                            @if (isBase)
+                            {
+                                <span class="badge text-bg-secondary ms-1">base</span>
+                            }
+                            @if (!lang.Active)
+                            {
+                                <span class="badge text-bg-light ms-1">inactive</span>
+                            }
+                        </label>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+
+    private bool _loading = true;
+    private ApiError? _loadError;
+    private ProjectDto? _project;
+
+    private IReadOnlyList<LanguageDto>? _languages;
+    private ApiError? _langError;
+    private string? _langBusy;
+
+    private bool _editing;
+    private bool _saving;
+    private ApiError? _saveError;
+    private readonly EditForm_ _form = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _editing = false;
+        await LoadAsync();
+        if (_languages is null)
+        {
+            var languages = await Api.GetLanguagesAsync(includeInactive: true);
+            if (languages.IsSuccess)
+            {
+                _languages = languages.Value;
+            }
+            else
+            {
+                _langError = languages.Error;
+            }
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        var result = await Api.GetProjectAsync(Code);
+        if (result.IsSuccess)
+        {
+            _project = result.Value;
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private void ToggleEdit()
+    {
+        _editing = !_editing;
+        _saveError = null;
+        if (_editing && _project is not null)
+        {
+            _form.Name = _project.Name;
+            _form.Description = _project.Description ?? "";
+            _form.BaseLanguageCode = _project.BaseLanguageCode;
+            _form.IsCommon = _project.IsCommon;
+            _form.Active = _project.Active;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_project is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        _saveError = null;
+        var request = new UpdateProjectRequest(
+            Name: _form.Name.Trim(),
+            Description: _form.Description.Trim(),
+            IsCommon: _form.IsCommon,
+            Active: _form.Active,
+            BaseLanguageCode: _form.BaseLanguageCode);
+
+        var result = await Api.UpdateProjectAsync(_project.Code, request);
+        _saving = false;
+
+        if (result.IsSuccess)
+        {
+            _project = result.Value;
+            _editing = false;
+        }
+        else
+        {
+            _saveError = result.Error;
+        }
+    }
+
+    private async Task ToggleLanguageAsync(string language, bool enable)
+    {
+        if (_project is null)
+        {
+            return;
+        }
+
+        _langBusy = language;
+        _langError = null;
+        var result = enable
+            ? await Api.EnableProjectLanguageAsync(_project.Code, language)
+            : await Api.DisableProjectLanguageAsync(_project.Code, language);
+        _langBusy = null;
+
+        if (result.IsSuccess)
+        {
+            _project = result.Value;
+        }
+        else
+        {
+            _langError = result.Error;
+        }
+    }
+
+    private sealed class EditForm_
+    {
+        [Required, StringLength(200, MinimumLength = 1)]
+        public string Name { get; set; } = "";
+
+        [StringLength(500)]
+        public string Description { get; set; } = "";
+
+        public string BaseLanguageCode { get; set; } = "";
+        public bool IsCommon { get; set; }
+        public bool Active { get; set; }
+    }
+}

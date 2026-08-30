@@ -10,4 +10,6 @@ public enum AuditAction
     Rejected = 4,
     Reopened = 5,
     Published = 6,
+    Archived = 7,
+    Unarchived = 8,
 }

@@ -1,4 +1,4 @@
-using CTMS.Domain.Locales;
+using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
 using CTMS.Infrastructure.Persistence.Mongo;
@@ -10,13 +10,14 @@ using MongoDB.Driver;
 namespace CTMS.Infrastructure.Persistence.Startup;
 
 /// <summary>
-/// Populates a sample project on startup, but only in the Development environment and only
-/// when <c>Seed:Enabled</c> is <c>true</c>. Idempotent: it does nothing if the sample project
-/// already exists.
+/// Populates a language catalogue and two sample projects on startup, but only in the
+/// Development environment and only when <c>Seed:Enabled</c> is <c>true</c>. Idempotent: it does
+/// nothing if the <c>common</c> project already exists.
 /// </summary>
 public sealed class DataSeeder : IHostedService
 {
-    private const string SampleSlug = "marketing-site";
+    public const string SharedApplicationSlug = "common";
+    public const string SampleApplicationSlug = "icoach";
     private const string Seeder = "seeder";
 
     private readonly IMongoContext _context;
@@ -43,45 +44,138 @@ public sealed class DataSeeder : IHostedService
             return;
         }
 
-        var alreadySeeded = await _context.Projects.Find(p => p.Slug == SampleSlug).AnyAsync(cancellationToken);
+        var alreadySeeded = await _context.Projects.Find(p => p.Slug == SharedApplicationSlug)
+            .AnyAsync(cancellationToken);
         if (alreadySeeded)
         {
             return;
         }
 
-        _logger.LogInformation("Seeding sample project '{Slug}'.", SampleSlug);
+        _logger.LogInformation("Seeding language catalogue and sample applications.");
 
-        var project = new Project("Marketing Site", SampleSlug, "en", "Sample data for local development.");
-        await _context.Projects.InsertOneAsync(project.StampCreated(), cancellationToken: cancellationToken);
+        await SeedLanguagesAsync(cancellationToken);
+        await SeedSharedApplicationAsync(cancellationToken);
+        await SeedSampleApplicationAsync(cancellationToken);
+    }
 
-        var english = new Locale(project.Id, "en", "English");
-        var french = new Locale(project.Id, "fr", "French");
-        var arabic = new Locale(project.Id, "ar", "Arabic", isRtl: true);
-        await _context.Locales.InsertManyAsync(
-            new[] { english.StampCreated(), french.StampCreated(), arabic.StampCreated() },
-            cancellationToken: cancellationToken);
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        var seedKeys = new (string Key, string Value, ReviewState State)[]
+    private static readonly string[] AllLanguageCodes =
+        ["en-GB", "fr-FR", "fr-CA", "de-DE", "es-ES", "ar-AE", "it-IT"];
+
+    private async Task SeedLanguagesAsync(CancellationToken cancellationToken)
+    {
+        var languages = new[]
         {
-            ("home.hero.title", "Ship translations faster", ReviewState.Approved),
-            ("home.hero.subtitle", "One source of truth for every locale", ReviewState.Approved),
-            ("home.cta.primary", "Start free trial", ReviewState.Approved),
-            ("nav.pricing", "Pricing", ReviewState.NeedsReview),
-            ("footer.copyright", "© Marketing Site", ReviewState.Draft),
+            new Language("en-GB", "English (UK)"),
+            new Language("fr-FR", "French", fallbackCode: "en-GB"),
+            new Language("fr-CA", "French (Canada)", fallbackCode: "fr-FR"),
+            new Language("de-DE", "German", fallbackCode: "en-GB"),
+            new Language("es-ES", "Spanish", fallbackCode: "en-GB"),
+            new Language("ar-AE", "Arabic", fallbackCode: "en-GB", isRtl: true),
+            new Language("it-IT", "Italian", fallbackCode: "en-GB"),
         };
 
-        foreach (var (keyName, value, state) in seedKeys)
-        {
-            var key = new TranslationKey(project.Id, keyName);
-            await _context.TranslationKeys.InsertOneAsync(key.StampCreated(), cancellationToken: cancellationToken);
+        // fr-CA -> fr-FR -> en-GB is the reference fallback chain.
 
-            var str = new TranslationString(key.Id, english.Id, value, Seeder);
+        await _context.Languages.InsertManyAsync(
+            languages.Select(l => l.StampCreated()),
+            cancellationToken: cancellationToken);
+    }
+
+    private async Task SeedSharedApplicationAsync(CancellationToken cancellationToken)
+    {
+        var common = new Project(
+            "Common", SharedApplicationSlug, "en-GB", "Common strings merged into every project.", isCommon: true);
+        common.SetEnabledLanguages(["en-GB", "fr-FR", "de-DE", "es-ES", "ar-AE", "it-IT"]);
+        await _context.Projects.InsertOneAsync(common.StampCreated(), cancellationToken: cancellationToken);
+
+        await SeedKeyAsync(common.Id, "common.save", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Save", ReviewState.Published),
+            ("fr-FR", "Enregistrer", ReviewState.Published),
+            ("de-DE", "Speichern", ReviewState.Published),
+        }, cancellationToken);
+
+        // A project (icoach) publishes its own "common.cancel" that overrides this one — see §22.
+        await SeedKeyAsync(common.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Cancel", ReviewState.Published),
+            ("fr-FR", "Annuler", ReviewState.Published),
+        }, cancellationToken);
+
+        await SeedKeyAsync(common.Id, "common.delete", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Delete", ReviewState.Published),
+        }, cancellationToken);
+
+        await SeedKeyAsync(common.Id, "common.legacy", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Legacy string", ReviewState.Archived),
+        }, cancellationToken);
+    }
+
+    private async Task SeedSampleApplicationAsync(CancellationToken cancellationToken)
+    {
+        var icoach = new Project("iCoach", SampleApplicationSlug, "en-GB", "Sample application for local development.");
+        icoach.SetEnabledLanguages(AllLanguageCodes);
+        await _context.Projects.InsertOneAsync(icoach.StampCreated(), cancellationToken: cancellationToken);
+
+        await SeedKeyAsync(icoach.Id, "course.start", "Course", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Start course", ReviewState.Published),
+            ("fr-FR", "Commencer le cours", ReviewState.Published),
+            ("de-DE", "Kurs starten", ReviewState.Approved),
+            ("es-ES", "Empezar", ReviewState.Draft),
+        }, cancellationToken);
+
+        await SeedKeyAsync(icoach.Id, "course.resume", "Course", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Resume course", ReviewState.Published),
+            ("fr-FR", "Reprendre le cours", ReviewState.Approved),
+        }, cancellationToken);
+
+        await SeedKeyAsync(icoach.Id, "course.complete", "Course", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Complete course", ReviewState.Draft),
+        }, cancellationToken);
+
+        await SeedKeyAsync(icoach.Id, "nav.home", "Navigation", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Home", ReviewState.Published),
+            ("fr-FR", "Accueil", ReviewState.Published),
+        }, cancellationToken);
+
+        // Project-level override of the common "common.cancel" (see §22).
+        await SeedKeyAsync(icoach.Id, "common.cancel", "Common", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Exit course", ReviewState.Published),
+            ("fr-FR", "Quitter le cours", ReviewState.Published),
+        }, cancellationToken);
+
+        await SeedKeyAsync(icoach.Id, "course.retired", "Course", new (string, string, ReviewState)[]
+        {
+            ("en-GB", "Retired copy", ReviewState.Archived),
+        }, cancellationToken);
+    }
+
+    private async Task SeedKeyAsync(
+        Guid projectId,
+        string keyName,
+        string category,
+        IReadOnlyList<(string Language, string Value, ReviewState State)> values,
+        CancellationToken cancellationToken)
+    {
+        var key = new TranslationKey(projectId, keyName, category, Seeder);
+        await _context.TranslationKeys.InsertOneAsync(key.StampCreated(), cancellationToken: cancellationToken);
+
+        foreach (var (language, value, state) in values)
+        {
+            var str = new TranslationString(key.Id, language, value, Seeder);
             MoveTo(str, state);
             await _context.TranslationStrings.InsertOneAsync(str.StampCreated(), cancellationToken: cancellationToken);
         }
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private static void MoveTo(TranslationString str, ReviewState target)
     {
@@ -89,12 +183,20 @@ public sealed class DataSeeder : IHostedService
         {
             case ReviewState.Draft:
                 break;
-            case ReviewState.NeedsReview:
-                str.ChangeReviewState(ReviewState.NeedsReview, Seeder);
+            case ReviewState.InReview:
+                str.ChangeReviewState(ReviewState.InReview, Seeder);
                 break;
             case ReviewState.Approved:
-                str.ChangeReviewState(ReviewState.NeedsReview, Seeder);
+                str.ChangeReviewState(ReviewState.InReview, Seeder);
                 str.ChangeReviewState(ReviewState.Approved, Seeder);
+                break;
+            case ReviewState.Published:
+                str.ChangeReviewState(ReviewState.InReview, Seeder);
+                str.ChangeReviewState(ReviewState.Approved, Seeder);
+                str.ChangeReviewState(ReviewState.Published, Seeder);
+                break;
+            case ReviewState.Archived:
+                str.ChangeReviewState(ReviewState.Archived, Seeder);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(target), target, "Unsupported seed state.");

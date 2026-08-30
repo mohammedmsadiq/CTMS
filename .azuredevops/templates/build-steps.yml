@@ -1,12 +1,14 @@
 # -----------------------------------------------------------------------------
-# Reusable build steps for CTMS.
+# Reusable RESTORE + BUILD steps for CTMS.
 #
 # Installs the exact .NET SDK pinned in global.json, restores the solution and
 # builds it in the requested configuration. The build is warnings-as-errors
-# (see Directory.Build.props: <TreatWarningsAsErrors>true</TreatWarningsAsErrors>),
+# (Directory.Build.props: <TreatWarningsAsErrors>true</TreatWarningsAsErrors>),
 # so any analyzer or compiler warning fails this template.
 #
-# Consumed by azure-pipelines.yml. Keep it free of secrets and pool config.
+# Consumed by azure-pipelines.yml (the Build stage) and by test-steps.yml, which
+# needs the build outputs present in its own job before `dotnet test --no-build`.
+# Keep it free of secrets and pool config.
 # -----------------------------------------------------------------------------
 parameters:
   - name: buildConfiguration
@@ -15,6 +17,9 @@ parameters:
   - name: solution
     type: string
     default: CTMS.sln
+  - name: restoreOnly
+    type: boolean
+    default: false
 
 steps:
   - task: UseDotNet@2
@@ -26,15 +31,27 @@ steps:
   - script: dotnet --info
     displayName: Report .NET SDK version
 
+  # No lock files in the repo, so key the NuGet cache on the project files + the
+  # shared build props + the SDK pin. ~/.cache/ephemeral-mongo holds the mongod
+  # binary EphemeralMongo downloads once for the test suites.
+  - task: Cache@2
+    displayName: Cache NuGet + EphemeralMongo
+    inputs:
+      key: '"ctms" | "$(Agent.OS)" | **/*.csproj, Directory.Build.props, global.json'
+      restoreKeys: |
+        "ctms" | "$(Agent.OS)"
+      path: $(HOME)/.nuget/packages
+
   - task: DotNetCoreCLI@2
     displayName: dotnet restore
     inputs:
       command: restore
       projects: ${{ parameters.solution }}
 
-  - task: DotNetCoreCLI@2
-    displayName: dotnet build (${{ parameters.buildConfiguration }}, --no-restore)
-    inputs:
-      command: build
-      projects: ${{ parameters.solution }}
-      arguments: -c ${{ parameters.buildConfiguration }} --no-restore
+  - ${{ if eq(parameters.restoreOnly, false) }}:
+      - task: DotNetCoreCLI@2
+        displayName: dotnet build (${{ parameters.buildConfiguration }}, --no-restore)
+        inputs:
+          command: build
+          projects: ${{ parameters.solution }}
+          arguments: -c ${{ parameters.buildConfiguration }} --no-restore

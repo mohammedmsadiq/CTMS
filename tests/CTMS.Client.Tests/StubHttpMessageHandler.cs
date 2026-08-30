@@ -7,9 +7,9 @@ using System.Text.Json;
 namespace CTMS.Client.Tests;
 
 /// <summary>
-/// Deterministic <see cref="HttpMessageHandler"/> for the SDK tests: a queue of per-call
-/// responders plus a record of every request (method, URI, and the <c>If-None-Match</c> values as
-/// they were at send time).
+/// Deterministic <see cref="HttpMessageHandler"/> for the SDK tests: a queue of per-call responders
+/// (falling back to <see cref="Fallback"/>) plus a record of every request — method, URI, the
+/// <c>If-None-Match</c> values and the <c>Authorization</c> header as they were at send time.
 /// </summary>
 internal sealed class StubHttpMessageHandler : HttpMessageHandler
 {
@@ -35,7 +35,8 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         Requests.Add(new RecordedRequest(
             request.Method,
             request.RequestUri!,
-            request.Headers.IfNoneMatch.Select(t => t.Tag ?? string.Empty).ToArray()));
+            request.Headers.IfNoneMatch.Select(t => t.Tag ?? string.Empty).ToArray(),
+            request.Headers.Authorization?.ToString()));
 
         var responder = _responders.Count > 0
             ? _responders.Dequeue()
@@ -46,6 +47,7 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 
     // --- response builders -------------------------------------------------
 
+    /// <summary>Mirrors the server's <c>TranslationContentHash.Compute</c>.</summary>
     public static string ComputeEtag(IReadOnlyDictionary<string, string> entries)
     {
         var builder = new StringBuilder();
@@ -57,25 +59,14 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
     }
 
-    public static HttpResponseMessage BundleOk(
-        Guid projectId,
-        string localeCode,
-        int version,
-        IReadOnlyDictionary<string, string> entries,
+    public static HttpResponseMessage TranslationsOk(
+        string application,
+        string language,
+        IReadOnlyDictionary<string, string> translations,
         string? etag = null)
     {
-        etag ??= ComputeEtag(entries);
-        var payload = JsonSerializer.Serialize(new
-        {
-            id = Guid.NewGuid(),
-            projectId,
-            localeCode,
-            version,
-            entries,
-            etag,
-            createdBy = "tester",
-            createdAt = DateTime.UtcNow,
-        });
+        etag ??= ComputeEtag(translations);
+        var payload = JsonSerializer.Serialize(new { project = application, language, translations });
 
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -106,5 +97,10 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         };
     }
 
-    internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string[] IfNoneMatch);
+    public static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(json, Encoding.UTF8, "application/json"),
+    };
+
+    internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string[] IfNoneMatch, string? Authorization);
 }

@@ -1,0 +1,32 @@
+@* Consistent page header: an <h1> (the FocusOnNavigate target), an optional one-line
+   description, and an optional primary-action slot on the right. *@
+<div class="page-header">
+    <div class="page-header-text">
+        <h1>@Title</h1>
+        @if (!string.IsNullOrWhiteSpace(Lead))
+        {
+            <p class="page-header-lead">@Lead</p>
+        }
+        @if (Description is not null)
+        {
+            <div class="page-header-lead">@Description</div>
+        }
+    </div>
+    @if (Actions is not null)
+    {
+        <div class="page-header-actions">@Actions</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>Short plain-text description shown under the title.</summary>
+    [Parameter] public string? Lead { get; set; }
+
+    /// <summary>Rich description (markup) — use instead of <see cref="Lead"/> when you need a link.</summary>
+    [Parameter] public RenderFragment? Description { get; set; }
+
+    /// <summary>Primary / secondary action buttons, right-aligned.</summary>
+    [Parameter] public RenderFragment? Actions { get; set; }
+}

@@ -8,6 +8,7 @@ public sealed class HealthEndpointsTests(MongoFixture mongo) : IntegrationTest(m
 {
     [Theory]
     [InlineData("/health")]
+    [InlineData("/health/live")]
     [InlineData("/health/ready")]
     public async Task Health_endpoints_are_200_for_anonymous_callers(string path)
     {

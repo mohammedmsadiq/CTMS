@@ -2,7 +2,7 @@ using CTMS.Domain.Common;
 
 namespace CTMS.Domain.Translations;
 
-/// <summary>The value of a <see cref="TranslationKey"/> in one locale.</summary>
+/// <summary>The value of a <see cref="TranslationKey"/> in one language. Last write wins.</summary>
 public sealed class TranslationString : Entity
 {
     private TranslationString()
@@ -10,23 +10,19 @@ public sealed class TranslationString : Entity
         // Materialization constructor for the persistence layer.
     }
 
-    public TranslationString(Guid translationKeyId, Guid localeId, string value, string updatedBy)
+    public TranslationString(Guid translationKeyId, string languageCode, string value, string updatedBy)
     {
         if (translationKeyId == Guid.Empty)
         {
             throw new ArgumentException("A translation string must reference a key.", nameof(translationKeyId));
         }
 
-        if (localeId == Guid.Empty)
-        {
-            throw new ArgumentException("A translation string must reference a locale.", nameof(localeId));
-        }
-
+        ArgumentException.ThrowIfNullOrWhiteSpace(languageCode);
         ArgumentNullException.ThrowIfNull(value);
         ArgumentException.ThrowIfNullOrWhiteSpace(updatedBy);
 
         TranslationKeyId = translationKeyId;
-        LocaleId = localeId;
+        LanguageCode = languageCode.Trim();
         Value = value;
         UpdatedBy = updatedBy.Trim();
         ReviewState = ReviewState.Draft;
@@ -34,21 +30,14 @@ public sealed class TranslationString : Entity
 
     public Guid TranslationKeyId { get; private set; }
 
-    public Guid LocaleId { get; private set; }
+    /// <summary>BCP-47 code of the language this value is for.</summary>
+    public string LanguageCode { get; private set; } = string.Empty;
 
     public string Value { get; private set; } = string.Empty;
 
     public ReviewState ReviewState { get; private set; }
 
     public string UpdatedBy { get; private set; } = string.Empty;
-
-    /// <summary>
-    /// Optimistic-concurrency token. A plain incrementing counter that the persistence layer
-    /// bumps on every stored update and guards with a filtered write, so concurrent edits to
-    /// the same string are detected. The setter is <c>internal</c> so only the infrastructure
-    /// assembly can advance it.
-    /// </summary>
-    public long Version { get; internal set; }
 
     public void Edit(string value, string editedBy)
     {
@@ -58,19 +47,20 @@ public sealed class TranslationString : Entity
         Value = value;
         UpdatedBy = editedBy.Trim();
 
-        // Editing content that has left Draft (NeedsReview, Approved or Published) sends it
-        // back for review; a draft stays a draft.
-        if (ReviewState != ReviewState.Draft)
+        // Editing content that has left Draft (InReview, Approved or Published) sends it
+        // back for review; a draft stays a draft. An archived string stays archived.
+        if (ReviewState is not ReviewState.Draft and not ReviewState.Archived)
         {
-            ReviewState = ReviewState.NeedsReview;
+            ReviewState = ReviewState.InReview;
         }
     }
 
     /// <summary>
     /// Applies a review-workflow transition. Legal moves are
-    /// Draft→NeedsReview (submit), NeedsReview→Approved (approve),
-    /// NeedsReview→Draft (reject), Approved→NeedsReview (reopen),
-    /// Approved→Published (publish) and Published→NeedsReview (reopen); anything else throws
+    /// Draft→InReview (submit), InReview→Approved (approve),
+    /// InReview→Draft (reject), {Approved,Published}→InReview (reopen),
+    /// Approved→Published (publish), {Draft,InReview,Approved,Published}→Archived (archive)
+    /// and Archived→Draft (unarchive); anything else throws
     /// <see cref="InvalidReviewTransitionException"/>.
     /// </summary>
     public void ChangeReviewState(ReviewState target, string reviewedBy)
@@ -79,12 +69,17 @@ public sealed class TranslationString : Entity
 
         var legal = (ReviewState, target) switch
         {
-            (ReviewState.Draft, ReviewState.NeedsReview) => true,
-            (ReviewState.NeedsReview, ReviewState.Approved) => true,
-            (ReviewState.NeedsReview, ReviewState.Draft) => true,
-            (ReviewState.Approved, ReviewState.NeedsReview) => true,
+            (ReviewState.Draft, ReviewState.InReview) => true,
+            (ReviewState.InReview, ReviewState.Approved) => true,
+            (ReviewState.InReview, ReviewState.Draft) => true,
+            (ReviewState.Approved, ReviewState.InReview) => true,
             (ReviewState.Approved, ReviewState.Published) => true,
-            (ReviewState.Published, ReviewState.NeedsReview) => true,
+            (ReviewState.Published, ReviewState.InReview) => true,
+            (ReviewState.Draft, ReviewState.Archived) => true,
+            (ReviewState.InReview, ReviewState.Archived) => true,
+            (ReviewState.Approved, ReviewState.Archived) => true,
+            (ReviewState.Published, ReviewState.Archived) => true,
+            (ReviewState.Archived, ReviewState.Draft) => true,
             _ => false,
         };
 

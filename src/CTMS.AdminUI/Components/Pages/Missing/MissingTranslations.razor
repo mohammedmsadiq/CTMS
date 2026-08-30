@@ -1,0 +1,278 @@
+@page "/projects/{Code}/missing"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
+@inject CtmsApiClient Api
+@inject NavigationManager Nav
+@inject CurrentUser CurrentUser
+@inject IAuthorizationService Authorization
+@inject AuthenticationStateProvider AuthState
+@inject ToastService Toasts
+
+<PageTitle>Missing — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="projects">Projects</a></li>
+        <li class="breadcrumb-item"><a href="@($"projects/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Missing</li>
+    </ol>
+</nav>
+
+<PageHeader Title="Missing translations"
+           Lead="Keys with at least one target language that has no non-draft value. Click a language chip to fix it right here." />
+
+<div class="row g-2 align-items-end mb-3">
+    <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1" for="miss-lang">Language</label>
+        <select id="miss-lang" class="form-select form-select-sm" value="@_language" @onchange="OnLanguageChanged">
+            <option value="">All enabled languages</option>
+            @foreach (var lang in _languages)
+            {
+                <option value="@lang">@lang</option>
+            }
+        </select>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <LoadingSpinner Message="Loading…" />
+}
+else if (_loadError is not null)
+{
+    <ErrorAlert Error="_loadError" OnRetry="LoadAsync" />
+}
+else if (_rows.Count == 0)
+{
+    <EmptyState Title="Nothing missing" Hint="Every key has a value in every target language." />
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Key</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Missing in</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _rows)
+                {
+                    <tr>
+                        <td><code>@row.Key</code></td>
+                        <td><span class="badge text-bg-light">@row.Category</span></td>
+                        <td>
+                            @foreach (var lang in row.MissingLanguages.ToArray())
+                            {
+                                var isEditing = _editing is { } ed && ed.KeyId == row.KeyId && ed.Lang == lang;
+                                <button type="button"
+                                        class="btn btn-sm me-1 mb-1 @(isEditing ? "btn-warning" : "btn-outline-warning")"
+                                        aria-expanded="@(isEditing ? "true" : "false")"
+                                        @onclick="() => BeginFix(row, lang)">
+                                    @lang
+                                </button>
+                            }
+                            <a class="btn btn-sm btn-link mb-1" href="@GridLink(row.Key)">Open in grid</a>
+
+                            @if (_editing is { } e2 && e2.KeyId == row.KeyId)
+                            {
+                                <div class="border rounded p-2 mt-2" dir="@(IsRtl(e2.Lang) ? "rtl" : "ltr")">
+                                    <label class="form-label small mb-1">Value for <code>@e2.Lang</code></label>
+                                    <textarea class="form-control form-control-sm" rows="2"
+                                              dir="@(IsRtl(e2.Lang) ? "rtl" : "ltr")"
+                                              aria-label="@($"{row.Key} — {e2.Lang}")"
+                                              @bind="_fixValue" @bind:event="oninput"></textarea>
+                                    @if (_fixError is not null)
+                                    {
+                                        <div class="text-danger small mt-1">@_fixError.Message</div>
+                                    }
+                                    <div class="d-flex gap-1 mt-2">
+                                        <button class="btn btn-sm btn-primary"
+                                                disabled="@(_fixBusy || string.IsNullOrWhiteSpace(_fixValue))"
+                                                @onclick="() => SaveFixAsync(row)">
+                                            @if (_fixBusy)
+                                            {
+                                                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                            }
+                                            Save
+                                        </button>
+                                        <button class="btn btn-sm btn-link" disabled="@_fixBusy" @onclick="() => _editing = null">Cancel</button>
+                                    </div>
+                                </div>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center">
+        <span class="text-muted small">
+            Showing @(_total == 0 ? 0 : _skip + 1)–@Math.Min(_skip + _take, _total) of @_total
+        </span>
+        <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" @onclick="PrevPage" disabled="@(_skip == 0 || _loading)">Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPage" disabled="@(_skip + _take >= _total || _loading)">Next</button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+
+    private const int _take = 50;
+    private int _skip;
+    private int _total;
+    private string _language = "";
+
+    private bool _loading = true;
+    private bool _canEdit;
+    private ApiError? _loadError;
+    private readonly List<MissingRow> _rows = new();
+    private readonly HashSet<string> _rtl = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<string> _languages = Array.Empty<string>();
+    private string? _loadedCode;
+
+    private (Guid KeyId, string Lang)? _editing;
+    private string _fixValue = "";
+    private bool _fixBusy;
+    private ApiError? _fixError;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedCode != Code)
+        {
+            _loadedCode = Code;
+            _skip = 0;
+            _language = "";
+            _editing = null;
+
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            _canEdit = (await Authorization.AuthorizeAsync(authState.User, AuthorizationPolicies.CanEditStrings)).Succeeded;
+
+            var app = await Api.GetProjectAsync(Code);
+            _languages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
+
+            var langs = await Api.GetLanguagesAsync(includeInactive: true);
+            if (langs.IsSuccess)
+            {
+                _rtl.Clear();
+                foreach (var l in langs.Value!.Where(l => l.IsRtl))
+                {
+                    _rtl.Add(l.Code);
+                }
+            }
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _editing = null;
+        var result = await Api.GetMissingAsync(
+            Code, string.IsNullOrWhiteSpace(_language) ? null : _language, _skip, _take);
+        if (result.IsSuccess)
+        {
+            _total = result.Value!.Total;
+            _rows.Clear();
+            foreach (var item in result.Value.Items)
+            {
+                _rows.Add(new MissingRow(item.KeyId, item.Key, item.Category, item.MissingLanguages.ToList()));
+            }
+
+            if (_skip > 0 && _rows.Count == 0 && _total > 0)
+            {
+                _skip = Math.Max(0, _skip - _take);
+                _loading = false;
+                await LoadAsync();
+                return;
+            }
+        }
+        else
+        {
+            _loadError = result.Error;
+        }
+        _loading = false;
+    }
+
+    private Task OnLanguageChanged(ChangeEventArgs e)
+    {
+        _language = e.Value?.ToString() ?? "";
+        _skip = 0;
+        return LoadAsync();
+    }
+
+    private Task NextPage()
+    {
+        _skip += _take;
+        return LoadAsync();
+    }
+
+    private Task PrevPage()
+    {
+        _skip = Math.Max(0, _skip - _take);
+        return LoadAsync();
+    }
+
+    private bool IsRtl(string lang) => _rtl.Contains(lang);
+
+    private string GridLink(string key) =>
+        $"projects/{Code}/grid?search={Uri.EscapeDataString(key)}";
+
+    private void BeginFix(MissingRow row, string lang)
+    {
+        if (!_canEdit)
+        {
+            Nav.NavigateTo(GridLink(row.Key));
+            return;
+        }
+
+        if (_editing is { } cur && cur.KeyId == row.KeyId && cur.Lang == lang)
+        {
+            _editing = null;
+            return;
+        }
+
+        _editing = (row.KeyId, lang);
+        _fixValue = "";
+        _fixError = null;
+    }
+
+    private async Task SaveFixAsync(MissingRow row)
+    {
+        if (_editing is not { } target)
+        {
+            return;
+        }
+
+        _fixBusy = true;
+        _fixError = null;
+        var result = await Api.UpsertStringAsync(
+            Code, target.KeyId, target.Lang,
+            new UpsertTranslationStringRequest(_fixValue, CurrentUser.DisplayName));
+        _fixBusy = false;
+
+        if (result.IsSuccess)
+        {
+            row.MissingLanguages.Remove(target.Lang);
+            _total = Math.Max(0, _total - (row.MissingLanguages.Count == 0 ? 1 : 0));
+            if (row.MissingLanguages.Count == 0)
+            {
+                _rows.Remove(row);
+            }
+            _editing = null;
+            Toasts.ShowSuccess($"Saved {target.Lang} for \"{row.Key}\".");
+        }
+        else
+        {
+            _fixError = result.Error;
+        }
+    }
+
+    private sealed record MissingRow(Guid KeyId, string Key, string Category, List<string> MissingLanguages);
+}

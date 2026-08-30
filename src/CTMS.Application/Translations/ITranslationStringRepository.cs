@@ -8,17 +8,30 @@ public interface ITranslationStringRepository
 {
     Task<IReadOnlyList<TranslationString>> ListByKeyAsync(Guid keyId, CancellationToken cancellationToken = default);
 
-    Task<TranslationString?> GetAsync(Guid keyId, Guid localeId, CancellationToken cancellationToken = default);
+    Task<TranslationString?> GetAsync(Guid keyId, string languageCode, CancellationToken cancellationToken = default);
 
-    /// <summary>Every published string for a project's locale, keyed for bundle assembly.</summary>
-    Task<IReadOnlyList<TranslationString>> ListByLocaleAndStateAsync(
-        Guid localeId,
-        ReviewState state,
+    /// <summary>Every string (any state, any language) for the given keys.</summary>
+    Task<IReadOnlyList<TranslationString>> ListByKeyIdsAsync(
+        IReadOnlyCollection<Guid> keyIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Every <see cref="ReviewState.Published"/> string (any language) for the given keys.</summary>
+    Task<IReadOnlyList<TranslationString>> ListPublishedByKeyIdsAsync(
+        IReadOnlyCollection<Guid> keyIds,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// One page of strings across the given keys (a project's whole key set), optionally filtered
-    /// by <paramref name="state"/>, newest-updated first, together with the total match count.
+    /// Every <see cref="ReviewState.Approved"/> string for the given keys, optionally restricted to
+    /// <paramref name="languageCode"/>. Used by bulk publish.
+    /// </summary>
+    Task<IReadOnlyList<TranslationString>> ListApprovedByKeyIdsAsync(
+        IReadOnlyCollection<Guid> keyIds,
+        string? languageCode,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One page of strings across the given keys, optionally filtered by <paramref name="state"/>,
+    /// newest-updated first, together with the total match count.
     /// </summary>
     Task<PagedResult<TranslationString>> ListByKeysAndStateAsync(
         IReadOnlyCollection<Guid> keyIds,
@@ -29,10 +42,6 @@ public interface ITranslationStringRepository
 
     Task AddAsync(TranslationString translationString, CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Persists an update to a stored string, guarding on its current <see cref="TranslationString.Version"/>
-    /// and advancing it. Throws <see cref="ConcurrencyException"/> (carrying the stored version) when the
-    /// row was changed concurrently.
-    /// </summary>
+    /// <summary>Persists an update to a stored string. Last write wins.</summary>
     Task UpdateAsync(TranslationString translationString, CancellationToken cancellationToken = default);
 }

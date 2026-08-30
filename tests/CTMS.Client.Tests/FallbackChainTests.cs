@@ -1,10 +1,12 @@
+using System.Net;
+
 namespace CTMS.Client.Tests;
 
 public sealed class FallbackChainTests
 {
-    private static readonly Dictionary<string, string> Fr = new() { ["greeting"] = "Bonjour", ["checkout"] = "Payer" };
+    private static readonly Dictionary<string, string> FrFr = new() { ["greeting"] = "Bonjour", ["checkout"] = "Payer" };
     private static readonly Dictionary<string, string> FrCa = new() { ["greeting"] = "Salut" };
-    private static readonly Dictionary<string, string> En = new() { ["greeting"] = "Hello", ["checkout"] = "Pay", ["only_en"] = "EN" };
+    private static readonly Dictionary<string, string> EnGb = new() { ["greeting"] = "Hello", ["checkout"] = "Pay", ["only.en"] = "EN" };
 
     private static async Task<CtmsClient> LoadedClientAsync()
     {
@@ -12,40 +14,41 @@ public sealed class FallbackChainTests
         {
             Fallback = req =>
             {
-                var locale = req.RequestUri!.AbsolutePath.Split('/')[^1].ToLowerInvariant();
-                return locale switch
+                var language = req.RequestUri!.AbsolutePath.Split('/')[^1];
+                return language switch
                 {
-                    "fr" => StubHttpMessageHandler.BundleOk(TestClient.ProjectId, "fr", 2, Fr),
-                    "fr-ca" => StubHttpMessageHandler.BundleOk(TestClient.ProjectId, "fr-CA", 1, FrCa),
-                    "en" => StubHttpMessageHandler.BundleOk(TestClient.ProjectId, "en", 4, En),
-                    _ => StubHttpMessageHandler.Problem(System.Net.HttpStatusCode.NotFound, "Not Found", "x"),
+                    "fr-FR" => StubHttpMessageHandler.TranslationsOk(TestClient.Application, "fr-FR", FrFr),
+                    "fr-CA" => StubHttpMessageHandler.TranslationsOk(TestClient.Application, "fr-CA", FrCa),
+                    "en-GB" => StubHttpMessageHandler.TranslationsOk(TestClient.Application, "en-GB", EnGb),
+                    _ => StubHttpMessageHandler.Problem(HttpStatusCode.NotFound, "Resource not found", "x"),
                 };
             },
         };
         var client = TestClient.Create(handler, out _);
-        await client.PrefetchAsync(new[] { "fr-CA", "fr", "en" });
+        await client.PrefetchAsync(new[] { "fr-CA", "fr-FR", "en-GB" });
         return client;
     }
 
     [Fact]
-    public async Task Exact_locale_wins()
+    public async Task Exact_language_wins()
     {
         var client = await LoadedClientAsync();
         Assert.Equal("Salut", client.Get("greeting", "fr-CA"));
     }
 
     [Fact]
-    public async Task Falls_back_to_the_parent_locale()
+    public async Task Falls_back_to_an_explicit_extra_language_before_the_default()
     {
         var client = await LoadedClientAsync();
-        Assert.Equal("Payer", client.Get("checkout", "fr-CA"));
+        // fr-CA has no "checkout"; the explicit extra "fr-FR" resolves before the default "en-GB".
+        Assert.Equal("Payer", client.Get("checkout", "fr-CA", "fr-FR"));
     }
 
     [Fact]
-    public async Task Falls_back_to_the_configured_default_locale()
+    public async Task Falls_back_to_the_configured_default_language()
     {
         var client = await LoadedClientAsync();
-        Assert.Equal("EN", client.Get("only_en", "fr-CA"));
+        Assert.Equal("EN", client.Get("only.en", "fr-CA"));
     }
 
     [Fact]
@@ -67,27 +70,19 @@ public sealed class FallbackChainTests
     {
         var handler = new StubHttpMessageHandler
         {
-            Fallback = _ => StubHttpMessageHandler.BundleOk(TestClient.ProjectId, "fr", 1, Fr),
+            Fallback = _ => StubHttpMessageHandler.TranslationsOk(TestClient.Application, "fr-FR", FrFr),
         };
         var client = TestClient.Create(handler, out _, configure: o => o.MissingKeyFallback = k => $"[{k}]");
-        await client.GetBundleAsync("fr");
+        await client.GetTranslationsAsync("fr-FR");
 
-        Assert.Equal("[ghost]", client.Get("ghost", "fr", Array.Empty<string>()));
+        Assert.Equal("[ghost]", client.Get("ghost", "fr-FR", Array.Empty<string>()));
     }
 
     [Fact]
-    public async Task Explicit_fallback_locales_are_tried_before_the_default()
+    public async Task Language_match_is_case_insensitive()
     {
         var client = await LoadedClientAsync();
-        // "de" has no bundle; explicit fallback "fr" resolves before default "en".
-        Assert.Equal("Bonjour", client.Get("greeting", "de", "fr"));
-    }
-
-    [Fact]
-    public async Task Locale_match_is_case_insensitive()
-    {
-        var client = await LoadedClientAsync();
-        Assert.Equal("Bonjour", client.Get("greeting", "FR"));
+        Assert.Equal("Bonjour", client.Get("greeting", "FR-fr"));
         Assert.Equal("Salut", client.Get("greeting", "fR-Ca"));
     }
 }

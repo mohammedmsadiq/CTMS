@@ -1,5 +1,5 @@
 using CTMS.Domain.Audit;
-using CTMS.Domain.Locales;
+using CTMS.Domain.Languages;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
 using MongoDB.Driver;
@@ -13,13 +13,11 @@ public interface IMongoContext
 
     IMongoCollection<Project> Projects { get; }
 
-    IMongoCollection<Locale> Locales { get; }
+    IMongoCollection<Language> Languages { get; }
 
     IMongoCollection<TranslationKey> TranslationKeys { get; }
 
     IMongoCollection<TranslationString> TranslationStrings { get; }
-
-    IMongoCollection<TranslationBundle> TranslationBundles { get; }
 
     IMongoCollection<AuditEntry> AuditEntries { get; }
 }

@@ -1,0 +1,62 @@
+# -----------------------------------------------------------------------------
+# Reusable SECURITY / DEPENDENCY scan for CTMS.
+#
+# `dotnet list package --vulnerable` (transitive included) over the SHIPPING
+# projects — CTMS.Api, CTMS.AdminUI, CTMS.Client. The test projects are skipped
+# on purpose: they set <NuGetAudit>false</NuGetAudit> because EphemeralMongo /
+# Testcontainers pull older transitive packages, and they never ship.
+#
+# A vulnerable transitive in shipping code FAILS the stage. Deprecated packages
+# are reported but do not fail (advisory).
+#
+# This is a lightweight NuGet-advisory gate; a full SCA / container scan
+# (Trivy / Defender for Cloud on the ACR image) hooks in at the same point and is
+# a `# TODO` for the security workstream.
+# -----------------------------------------------------------------------------
+parameters:
+  - name: buildConfiguration
+    type: string
+    default: Release
+  - name: shippingProjects
+    type: object
+    default:
+      - src/CTMS.Api/CTMS.Api.csproj
+      - src/CTMS.AdminUI/CTMS.AdminUI.csproj
+      - src/CTMS.Client/CTMS.Client.csproj
+
+steps:
+  - task: UseDotNet@2
+    displayName: Install .NET SDK (pinned by global.json)
+    inputs:
+      packageType: sdk
+      useGlobalJson: true
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet restore (solution)
+    inputs:
+      command: restore
+      projects: CTMS.sln
+
+  - script: |
+      set -uo pipefail
+      fail=0
+      for proj in ${{ join(' ', parameters.shippingProjects) }}; do
+        echo "==== $proj ===="
+        out="$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1)"
+        echo "$out"
+        if echo "$out" | grep -q "has the following vulnerable packages"; then
+          echo "##vso[task.logissue type=error]Vulnerable NuGet package(s) in $proj"
+          fail=1
+        fi
+      done
+      exit $fail
+    displayName: Fail on vulnerable NuGet packages (shipping projects)
+
+  - script: |
+      set -uo pipefail
+      for proj in ${{ join(' ', parameters.shippingProjects) }}; do
+        echo "==== $proj ===="
+        dotnet list "$proj" package --deprecated --include-transitive 2>&1 || true
+      done
+    displayName: Report deprecated NuGet packages (advisory)
+    continueOnError: true

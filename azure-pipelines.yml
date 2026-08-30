@@ -4,33 +4,51 @@
 # Triggers
 #   CI  : every push to `main`
 #   PR  : validation build for pull requests targeting `main`
+#         (.github/workflows/ci.yml is the required PR *check*; this pipeline
+#          runs the same restore/build/test on PRs and additionally packages +
+#          deploys on `main`.)
 #
 # Stages
-#   Build    - install SDK, restore, build (warnings-as-errors), test + coverage.
-#              Runs on every CI and PR build.
-#   Package  - `dotnet publish` the API + `docker buildAndPush` the root
-#              Dockerfile to ACR. `main` only.
-#   Deploy   - DISABLED stub (condition: false) that documents where the Azure
-#              Container Apps rollout hooks in. See
-#              .azuredevops/templates/deploy-stage.yml.
+#   Build            - install SDK, restore, build (warnings-as-errors).
+#   UnitTests        - CTMS.Application.Tests + CTMS.Client.Tests, + coverage.
+#   IntegrationTests - CTMS.Api.IntegrationTests (HTTP surface), + coverage.
+#   Coverage         - merge every tier's Cobertura into one report.
+#   Security         - `dotnet list package --vulnerable` over the shipping
+#                      projects; fails on a vulnerable transitive.
+#   Package          - `dotnet publish` the API + `docker buildAndPush` to ACR.
+#                      `main` only.
+#   Deploy_*         - one stage per environment (Development / Test / Staging /
+#                      Production) that runs deploy/azure/main.bicep. Every stage
+#                      is INERT by default (`deployEnabled` = false) and gated on
+#                      an Azure DevOps Environment; Production also carries an
+#                      in-pipeline ManualValidation approval. See
+#                      docs/azure-devops.md.
 #
-# MongoDB for the test job
-#   No service / resource container is attached. Both suites self-provision and
-#   neither reads ConnectionStrings:CtmsDatabase, so a container would be dead
-#   wiring (GitHub Actions' .github/workflows/ci.yml is deliberately identical):
-#     * tests/CTMS.Application.Tests  - EphemeralMongo (in-process mongod).
-#     * tests/CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent
-#       has a Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo.
+# MongoDB for the tests
+#   No service / resource container. Both suites self-provision and neither reads
+#   ConnectionStrings:CtmsDatabase:
+#     * CTMS.Application.Tests   - EphemeralMongo (in-process mongod).
+#     * CTMS.Client.Tests       - stub HttpMessageHandler.
+#     * CTMS.Api.IntegrationTests - Testcontainers `mongo:7` when the agent has a
+#       Docker daemon (vmImage: ubuntu-latest does), else EphemeralMongo.
 #
 # Variable groups (Pipelines > Library) - referenced, never defined here:
-#   ctms-ci   - shared CI knobs.
-#   ctms-acr  - registry coordinates. Expected keys:
-#                 acrServiceConnection  - Docker registry service connection name
-#                 acrLoginServer        - e.g. myregistry.azurecr.io
-#                 imageRepository       - e.g. ctms/api
+#   ctms-ci     - shared CI knobs.
+#   ctms-acr    - registry coordinates:
+#                   acrServiceConnection  - Docker registry service connection name
+#                   acrLoginServer        - e.g. myregistry.azurecr.io
+#                   imageRepository       - e.g. ctms/api
+#   ctms-deploy - deployment coordinates (only needed once Deploy_* is enabled):
+#                   azureServiceConnection - ARM / workload-identity connection name
+#                   resourceGroupDev / resourceGroupTest / resourceGroupStaging /
+#                   resourceGroupProd
 #
-# No secrets or real connection names live in this file.
+# No secrets or real connection strings live in this file. Mongo/Redis
+# connection strings are Key Vault references resolved by the container app's
+# managed identity (see docs/azure-deployment.md).
 # =============================================================================
+
+name: $(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
   branches:
@@ -45,18 +63,32 @@ pr:
 variables:
   - group: ctms-ci
   - group: ctms-acr
+  - group: ctms-deploy
   - name: buildConfiguration
     value: Release
   - name: vmImage
     value: ubuntu-latest
+  - name: isMain
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+  # Flip a Deploy_* stage on by setting the matching variable to 'true' here or
+  # in the ctms-deploy variable group, once deploy/azure + the ADO Environment
+  # exist. Left 'false' so the deploy stages never run from this commit.
+  - name: deployDevelopment
+    value: 'false'
+  - name: deployTest
+    value: 'false'
+  - name: deployStaging
+    value: 'false'
+  - name: deployProduction
+    value: 'false'
 
 stages:
   # ---------------------------------------------------------------------------
   - stage: Build
-    displayName: Build & test
+    displayName: Restore & build
     jobs:
-      - job: build_test
-        displayName: Restore, build, test (+coverage)
+      - job: build
+        displayName: Restore, build (warnings-as-errors)
         pool:
           vmImage: $(vmImage)
         steps:
@@ -64,71 +96,146 @@ stages:
             parameters:
               buildConfiguration: $(buildConfiguration)
 
+  # ---------------------------------------------------------------------------
+  - stage: UnitTests
+    displayName: Unit tests
+    dependsOn: Build
+    jobs:
+      - job: unit
+        displayName: Application + client suites (+coverage)
+        pool:
+          vmImage: $(vmImage)
+        steps:
           - template: .azuredevops/templates/test-steps.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+              displayName: Unit tests (application + client)
+              runName: unit
+              testProjects: |
+                tests/CTMS.Application.Tests/CTMS.Application.Tests.csproj
+                tests/CTMS.Client.Tests/CTMS.Client.Tests.csproj
+
+  # ---------------------------------------------------------------------------
+  - stage: IntegrationTests
+    displayName: Integration tests
+    dependsOn: Build
+    jobs:
+      - job: integration
+        displayName: HTTP surface via WebApplicationFactory (+coverage)
+        pool:
+          vmImage: $(vmImage)   # has a Docker daemon -> Testcontainers mongo:7
+        steps:
+          - template: .azuredevops/templates/test-steps.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+              displayName: Integration tests (HTTP surface)
+              runName: integration
+              testProjects: tests/CTMS.Api.IntegrationTests/CTMS.Api.IntegrationTests.csproj
+
+  # ---------------------------------------------------------------------------
+  - stage: Coverage
+    displayName: Code coverage
+    dependsOn:
+      - UnitTests
+      - IntegrationTests
+    jobs:
+      - job: coverage
+        displayName: Merge Cobertura (ReportGenerator)
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - template: .azuredevops/templates/coverage-steps.yml
+
+  # ---------------------------------------------------------------------------
+  - stage: Security
+    displayName: Security / dependency scan
+    dependsOn: Build
+    jobs:
+      - job: scan
+        displayName: NuGet advisory scan (shipping projects)
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - template: .azuredevops/templates/security-steps.yml
             parameters:
               buildConfiguration: $(buildConfiguration)
 
   # ---------------------------------------------------------------------------
   - stage: Package
-    displayName: Publish & containerise
-    dependsOn: Build
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    displayName: Docker build & publish artifacts
+    dependsOn:
+      - UnitTests
+      - IntegrationTests
+      - Coverage
+      - Security
+    condition: and(succeeded(), eq(variables.isMain, 'true'))
     jobs:
       - job: package
         displayName: dotnet publish + docker buildAndPush
         pool:
           vmImage: $(vmImage)
         steps:
-          - task: UseDotNet@2
-            displayName: Install .NET SDK (pinned by global.json)
-            inputs:
-              packageType: sdk
-              useGlobalJson: true
-
-          - task: DotNetCoreCLI@2
-            displayName: dotnet restore
-            inputs:
-              command: restore
-              projects: CTMS.sln
-
-          - task: DotNetCoreCLI@2
-            displayName: dotnet publish (src/CTMS.Api)
-            inputs:
-              command: publish
-              publishWebProjects: false
-              zipAfterPublish: true
-              projects: src/CTMS.Api/CTMS.Api.csproj
-              arguments: >-
-                -c $(buildConfiguration)
-                --no-restore
-                -o "$(Build.ArtifactStagingDirectory)/api"
-
-          - task: PublishPipelineArtifact@1
-            displayName: Publish API build artifact
-            inputs:
-              targetPath: "$(Build.ArtifactStagingDirectory)/api"
-              artifact: ctms-api
-
-          # Build context is the repo root, matching the root Dockerfile's
-          # own contract ("Build context MUST be the repository root").
-          - task: Docker@2
-            displayName: Build & push CTMS API image to ACR
-            inputs:
-              command: buildAndPush
-              containerRegistry: $(acrServiceConnection)
-              repository: $(imageRepository)
-              dockerfile: "$(Build.SourcesDirectory)/Dockerfile"
-              buildContext: "$(Build.SourcesDirectory)"
-              tags: |
-                $(Build.BuildNumber)
-                latest
+          - template: .azuredevops/templates/package-steps.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+              acrServiceConnection: $(acrServiceConnection)
+              imageRepository: $(imageRepository)
 
   # ---------------------------------------------------------------------------
-  # DISABLED stub. condition: false lives inside the template's stage.
+  # Deploy - one stage per environment. All inert until `deploy*` is 'true'.
+  # Production carries an in-pipeline ManualValidation approval on top of its
+  # Azure DevOps Environment checks.
   - template: .azuredevops/templates/deploy-stage.yml
     parameters:
+      stageName: Deploy_Development
+      displayName: Deploy - Development
       dependsOn: Package
-      environmentName: ctms-production
+      environmentName: ctms-development
+      deployEnabled: $(deployDevelopment)
+      bicepEnvironmentName: dev
+      azureServiceConnection: $(azureServiceConnection)
+      resourceGroup: $(resourceGroupDev)
       acrLoginServer: $(acrLoginServer)
       imageRepository: $(imageRepository)
-      imageTag: $(Build.BuildNumber)
+
+  - template: .azuredevops/templates/deploy-stage.yml
+    parameters:
+      stageName: Deploy_Test
+      displayName: Deploy - Test
+      dependsOn: Deploy_Development
+      environmentName: ctms-test
+      deployEnabled: $(deployTest)
+      bicepEnvironmentName: test
+      azureServiceConnection: $(azureServiceConnection)
+      resourceGroup: $(resourceGroupTest)
+      acrLoginServer: $(acrLoginServer)
+      imageRepository: $(imageRepository)
+
+  - template: .azuredevops/templates/deploy-stage.yml
+    parameters:
+      stageName: Deploy_Staging
+      displayName: Deploy - Staging
+      dependsOn: Deploy_Test
+      environmentName: ctms-staging
+      deployEnabled: $(deployStaging)
+      # main.bicep's environmentName only allows dev|test|prod; Staging maps onto
+      # `test` naming until the infra workstream adds a `staging` value.
+      bicepEnvironmentName: test
+      azureServiceConnection: $(azureServiceConnection)
+      resourceGroup: $(resourceGroupStaging)
+      acrLoginServer: $(acrLoginServer)
+      imageRepository: $(imageRepository)
+
+  - template: .azuredevops/templates/deploy-stage.yml
+    parameters:
+      stageName: Deploy_Production
+      displayName: Deploy - Production
+      dependsOn: Deploy_Staging
+      environmentName: ctms-production
+      deployEnabled: $(deployProduction)
+      requireManualApproval: true
+      bicepEnvironmentName: prod
+      azureServiceConnection: $(azureServiceConnection)
+      resourceGroup: $(resourceGroupProd)
+      acrLoginServer: $(acrLoginServer)
+      imageRepository: $(imageRepository)
