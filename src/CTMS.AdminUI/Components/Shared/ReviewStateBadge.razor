@@ -1,4 +1,4 @@
-<span class="badge @CssClass text-nowrap" title="@($"Review state: {State}")">@Label</span>
+<span class="ctms-chip @CssClass" title="@($"Review state: {State}")">@Label</span>
 
 @code {
     /// <summary>
@@ -21,11 +21,11 @@
 
     private string CssClass => State switch
     {
-        ReviewStates.Draft => "text-bg-secondary",
-        ReviewStates.InReview => "text-bg-warning",
-        ReviewStates.Approved => "text-bg-success",
-        ReviewStates.Published => "text-bg-primary",
-        ReviewStates.Archived => "text-bg-light border text-muted",
-        _ => "text-bg-light",
+        ReviewStates.Draft => "ctms-chip--slate",
+        ReviewStates.InReview => "ctms-chip--amber",
+        ReviewStates.Approved => "ctms-chip--green",
+        ReviewStates.Published => "ctms-chip--blue",
+        ReviewStates.Archived => "ctms-chip--muted",
+        _ => "ctms-chip--slate",
     };
 }
