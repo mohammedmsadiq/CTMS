@@ -1,6 +1,7 @@
 @page "/applications/{Code}/publish"
 @attribute [Authorize(Policy = AuthorizationPolicies.CanRead)]
 @inject CtmsApiClient Api
+@inject ToastService Toasts
 
 <PageTitle>Publish — CTMS Admin</PageTitle>
 
@@ -12,20 +13,17 @@
     </ol>
 </nav>
 
-<h1 class="h3 mb-3">Publish translations</h1>
+<PageHeader Title="Publish translations"
+           Lead="Promote approved strings to the live delivery map. Pick a language to see exactly what would change first." />
 
 <div class="card mb-4">
     <div class="card-body">
-        <h2 class="h5">Promote approved strings</h2>
-        <p class="text-muted small">
-            Moves every <code>Approved</code> string for this application (optionally one language)
-            to <code>Published</code> and refreshes the delivery cache.
-        </p>
-        <div class="row g-2 align-items-end">
+        <h2 class="h5">Pending changes</h2>
+        <div class="row g-2 align-items-end mb-2">
             <div class="col-sm-4 col-md-3">
                 <label class="form-label small mb-1" for="pub-lang">Language</label>
-                <select id="pub-lang" class="form-select form-select-sm" @bind="_language">
-                    <option value="">All enabled languages</option>
+                <select id="pub-lang" class="form-select form-select-sm" value="@_language" @onchange="OnLanguageChanged">
+                    <option value="">Choose a language…</option>
                     @foreach (var lang in _languages)
                     {
                         <option value="@lang">@lang</option>
@@ -35,12 +33,13 @@
             <div class="col-auto">
                 <AuthorizeView Policy="@AuthorizationPolicies.CanPublish" Context="pub">
                     <Authorized>
-                        <button class="btn btn-primary" disabled="@_publishing" @onclick="PublishAsync">
+                        <button class="btn btn-primary" disabled="@(_publishing || string.IsNullOrEmpty(_language) || (_preview is not null && _preview.Changes.Count == 0))"
+                                @onclick="PublishAsync">
                             @if (_publishing)
                             {
                                 <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
                             }
-                            Publish
+                            Publish @(_language is { Length: > 0 } ? _language : "…")
                         </button>
                     </Authorized>
                     <NotAuthorized>
@@ -50,13 +49,65 @@
                 </AuthorizeView>
             </div>
         </div>
+
+        <ErrorAlert Error="_previewError" OnRetry="LoadPreviewAsync" />
         <ErrorAlert Error="_publishError" />
-        @if (_lastResult is not null)
+
+        @if (string.IsNullOrEmpty(_language))
         {
-            <div class="alert alert-success mt-3 mb-0">
-                Published <strong>@_lastResult.Published</strong>
-                string@(_lastResult.Published == 1 ? "" : "s").
-            </div>
+            <p class="text-muted small mb-0">Select a language above to preview the added and changed entries a publish would produce.</p>
+        }
+        else if (_previewLoading)
+        {
+            <LoadingSpinner Message="Computing the diff…" />
+        }
+        else if (_preview is not null)
+        {
+            <p class="small mb-2">
+                <span class="badge text-bg-success">@_preview.AddedCount added</span>
+                <span class="badge text-bg-warning ms-1">@_preview.ChangedCount changed</span>
+            </p>
+
+            @if (_preview.Changes.Count == 0)
+            {
+                <EmptyState Title="Nothing to publish"
+                            Hint="@($"Every approved {_language} string is already live.")" />
+            }
+            else
+            {
+                <div class="table-responsive" style="max-height: 30rem;">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th scope="col" style="width: 6rem;">Kind</th>
+                                <th scope="col">Key</th>
+                                <th scope="col">Current</th>
+                                <th scope="col">New</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var change in _preview.Changes)
+                            {
+                                <tr>
+                                    <td>
+                                        @if (string.Equals(change.Kind, "added", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <span class="badge text-bg-success">added</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-warning">changed</span>
+                                        }
+                                    </td>
+                                    <td><code>@change.Key</code></td>
+                                    <td class="text-muted">@(string.IsNullOrEmpty(change.CurrentValue) ? "—" : change.CurrentValue)</td>
+                                    <td>@change.NewValue</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
         }
     </div>
 </div>
@@ -71,7 +122,7 @@
         <div class="row g-2 align-items-end mb-2">
             <div class="col-sm-4 col-md-3">
                 <label class="form-label small mb-1" for="prev-lang">Language</label>
-                <select id="prev-lang" class="form-select form-select-sm" value="@_previewLanguage" @onchange="OnPreviewLanguageChanged">
+                <select id="prev-lang" class="form-select form-select-sm" value="@_deliveryLanguage" @onchange="OnDeliveryLanguageChanged">
                     <option value="">Choose a language…</option>
                     @foreach (var lang in _languages)
                     {
@@ -81,21 +132,21 @@
             </div>
         </div>
 
-        @if (_previewLoading)
+        @if (_deliveryLoading)
         {
             <LoadingSpinner Message="Assembling…" />
         }
-        else if (_previewError is not null)
+        else if (_deliveryError is not null)
         {
-            <ErrorAlert Error="_previewError" />
+            <ErrorAlert Error="_deliveryError" />
         }
-        else if (_preview is not null)
+        else if (_delivery is not null)
         {
             <p class="small mb-2">
-                <span class="text-muted">ETag</span> <code>@(_preview.ETag ?? "—")</code>
-                <span class="text-muted ms-3">Entries</span> <strong>@_preview.Body.Translations.Count</strong>
+                <span class="text-muted">ETag</span> <code>@(_delivery.ETag ?? "—")</code>
+                <span class="text-muted ms-3">Entries</span> <strong>@_delivery.Body.Translations.Count</strong>
             </p>
-            @if (_preview.Body.Translations.Count == 0)
+            @if (_delivery.Body.Translations.Count == 0)
             {
                 <EmptyState Title="Nothing published"
                             Hint="No key has a published value for this language yet." />
@@ -111,7 +162,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach (var entry in _preview.Body.Translations)
+                            @foreach (var entry in _delivery.Body.Translations)
                             {
                                 <tr>
                                     <td><code>@entry.Key</code></td>
@@ -131,15 +182,17 @@
 
     private string _language = "";
     private bool _publishing;
+    private bool _previewLoading;
     private ApiError? _publishError;
-    private PublishTranslationsResult? _lastResult;
+    private ApiError? _previewError;
+    private PublishPreviewResult? _preview;
 
     private IReadOnlyList<string> _languages = Array.Empty<string>();
 
-    private string _previewLanguage = "";
-    private bool _previewLoading;
-    private ApiError? _previewError;
-    private PublishedDelivery? _preview;
+    private string _deliveryLanguage = "";
+    private bool _deliveryLoading;
+    private ApiError? _deliveryError;
+    private PublishedDelivery? _delivery;
     private string? _loadedCode;
 
     protected override async Task OnParametersSetAsync()
@@ -151,52 +204,32 @@
 
         _loadedCode = Code;
         _language = "";
-        _previewLanguage = "";
+        _deliveryLanguage = "";
         _preview = null;
-        _lastResult = null;
+        _delivery = null;
+        _publishError = null;
         var app = await Api.GetApplicationAsync(Code);
         _languages = app.IsSuccess ? app.Value!.EnabledLanguageCodes : Array.Empty<string>();
     }
 
-    private async Task PublishAsync()
+    private Task OnLanguageChanged(ChangeEventArgs e)
     {
-        _publishing = true;
+        _language = e.Value?.ToString() ?? "";
         _publishError = null;
-        _lastResult = null;
-        var result = await Api.PublishAsync(Code, string.IsNullOrWhiteSpace(_language) ? null : _language);
-        _publishing = false;
-
-        if (result.IsSuccess)
-        {
-            _lastResult = result.Value;
-            if (_preview is not null && !string.IsNullOrEmpty(_previewLanguage))
-            {
-                await LoadPreviewAsync();
-            }
-        }
-        else
-        {
-            _publishError = result.Error;
-        }
-    }
-
-    private Task OnPreviewLanguageChanged(ChangeEventArgs e)
-    {
-        _previewLanguage = e.Value?.ToString() ?? "";
         return LoadPreviewAsync();
     }
 
     private async Task LoadPreviewAsync()
     {
-        if (string.IsNullOrEmpty(_previewLanguage))
+        _preview = null;
+        _previewError = null;
+        if (string.IsNullOrEmpty(_language))
         {
-            _preview = null;
             return;
         }
 
         _previewLoading = true;
-        _previewError = null;
-        var result = await Api.GetPublishedTranslationsAsync(Code, _previewLanguage);
+        var result = await Api.GetPublishPreviewAsync(Code, _language);
         _previewLoading = false;
 
         if (result.IsSuccess)
@@ -205,8 +238,59 @@
         }
         else
         {
-            _preview = null;
             _previewError = result.Error;
+        }
+    }
+
+    private async Task PublishAsync()
+    {
+        _publishing = true;
+        _publishError = null;
+        var result = await Api.PublishAsync(Code, string.IsNullOrWhiteSpace(_language) ? null : _language);
+        _publishing = false;
+
+        if (result.IsSuccess)
+        {
+            Toasts.ShowSuccess($"Published {result.Value!.Published} string{(result.Value.Published == 1 ? "" : "s")}.");
+            await LoadPreviewAsync();
+            if (!string.IsNullOrEmpty(_deliveryLanguage))
+            {
+                await LoadDeliveryAsync();
+            }
+        }
+        else
+        {
+            _publishError = result.Error;
+        }
+    }
+
+    private Task OnDeliveryLanguageChanged(ChangeEventArgs e)
+    {
+        _deliveryLanguage = e.Value?.ToString() ?? "";
+        return LoadDeliveryAsync();
+    }
+
+    private async Task LoadDeliveryAsync()
+    {
+        if (string.IsNullOrEmpty(_deliveryLanguage))
+        {
+            _delivery = null;
+            return;
+        }
+
+        _deliveryLoading = true;
+        _deliveryError = null;
+        var result = await Api.GetPublishedTranslationsAsync(Code, _deliveryLanguage);
+        _deliveryLoading = false;
+
+        if (result.IsSuccess)
+        {
+            _delivery = result.Value;
+        }
+        else
+        {
+            _delivery = null;
+            _deliveryError = result.Error;
         }
     }
 }

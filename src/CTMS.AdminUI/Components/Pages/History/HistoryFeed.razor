@@ -12,12 +12,11 @@
     </ol>
 </nav>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">History</h1>
-    <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_loading">Refresh</button>
-</div>
-
-<p class="text-muted small">Append-only audit trail for <code>@Code</code>. Newest first.</p>
+<PageHeader Title="History" Lead="@($"Append-only audit trail for {Code}. Newest first.")">
+    <Actions>
+        <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_loading">Refresh</button>
+    </Actions>
+</PageHeader>
 
 @if (_loading)
 {

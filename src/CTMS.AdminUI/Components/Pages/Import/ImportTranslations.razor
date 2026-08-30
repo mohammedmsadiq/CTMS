@@ -1,0 +1,323 @@
+@page "/applications/{Code}/import"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanManageContent)]
+@inject CtmsApiClient Api
+@inject ToastService Toasts
+
+<PageTitle>Import — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
+        <li class="breadcrumb-item"><a href="@($"applications/{Code}")">@Code</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Import</li>
+    </ol>
+</nav>
+
+<PageHeader Title="Import translations"
+           Lead="Bulk-load values for one language from a JSON, flat, CSV or RESX file. Preview first — nothing is written until you press Import." />
+
+@if (_metaError is not null)
+{
+    <ErrorAlert Error="_metaError" OnRetry="LoadMetaAsync" />
+}
+else
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-sm-6 col-md-3">
+                    <label class="form-label" for="imp-format">Format</label>
+                    <select id="imp-format" class="form-select" @bind="_format">
+                        @foreach (var (value, label) in ImportFormats.All)
+                        {
+                            <option value="@value">@label</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-sm-6 col-md-3">
+                    <label class="form-label" for="imp-lang">Language</label>
+                    <select id="imp-lang" class="form-select" @bind="_language">
+                        <option value="">Choose…</option>
+                        @foreach (var lang in _languages)
+                        {
+                            <option value="@lang">@lang</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-sm-6 col-md-3">
+                    <label class="form-label" for="imp-status">Initial status</label>
+                    <select id="imp-status" class="form-select" @bind="_status">
+                        <option value="@ReviewStates.Draft">Draft</option>
+                        <option value="@ReviewStates.NeedsReview">Needs review</option>
+                        <option value="@ReviewStates.Approved">Approved</option>
+                    </select>
+                </div>
+                <div class="col-sm-6 col-md-3">
+                    <label class="form-label" for="imp-cat">Category override <span class="text-muted">(optional)</span></label>
+                    <input id="imp-cat" class="form-control" placeholder="derived from key" @bind="_category" />
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label" for="imp-file">Upload a file <span class="text-muted">(or paste below)</span></label>
+                    <InputFile id="imp-file" class="form-control" OnChange="OnFileChangedAsync" />
+                    @if (_fileNote is not null)
+                    {
+                        <div class="form-text">@_fileNote</div>
+                    }
+                </div>
+                <div class="col-12">
+                    <label class="form-label" for="imp-content">Content</label>
+                    <textarea id="imp-content" class="form-control font-monospace" rows="12"
+                              spellcheck="false" @bind="_content" @bind:event="oninput"
+                              placeholder="Paste the file body here…"></textarea>
+                    <div class="form-text">@ContentSizeNote</div>
+                </div>
+            </div>
+
+            <ErrorAlert Error="_error" />
+
+            <div class="d-flex gap-2 mt-3">
+                <button class="btn btn-outline-primary" disabled="@(!CanSubmit || _busy)" @onclick="() => RunAsync(dryRun: true)">
+                    @if (_busy && _dryRunInFlight)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                    }
+                    Preview
+                </button>
+                <button class="btn btn-primary" disabled="@(!CanSubmit || _busy || _plan is null || !_lastWasDryRun)" @onclick="() => RunAsync(dryRun: false)">
+                    @if (_busy && !_dryRunInFlight)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                    }
+                    Import
+                </button>
+                @if (_plan is not null && _lastWasDryRun)
+                {
+                    <span class="align-self-center text-muted small">Preview is current — press Import to apply it.</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (_plan is not null)
+    {
+        <h2 class="h5">@(_lastWasDryRun ? "Preview" : "Import result")</h2>
+        <div class="row row-cols-2 row-cols-md-4 g-3 mb-3">
+            <div class="col"><div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Keys created</div>
+                <div class="fs-4 fw-semibold">@_plan.CreatedKeys</div>
+            </div></div></div>
+            <div class="col"><div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Strings created</div>
+                <div class="fs-4 fw-semibold">@_plan.CreatedStrings</div>
+            </div></div></div>
+            <div class="col"><div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Strings updated</div>
+                <div class="fs-4 fw-semibold">@_plan.UpdatedStrings</div>
+            </div></div></div>
+            <div class="col"><div class="card h-100"><div class="card-body">
+                <div class="text-muted small text-uppercase">Skipped</div>
+                <div class="fs-4 fw-semibold">@_plan.Skipped</div>
+            </div></div></div>
+        </div>
+
+        @if (_plan.Errors.Count > 0)
+        {
+            <h3 class="h6 text-danger">@_plan.Errors.Count problem@(_plan.Errors.Count == 1 ? "" : "s")</h3>
+            <div class="table-responsive mb-3" style="max-height: 18rem;">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th scope="col" style="width: 5rem;">Line</th>
+                            <th scope="col">Key</th>
+                            <th scope="col">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var err in _plan.Errors)
+                        {
+                            <tr>
+                                <td>@(err.Line?.ToString() ?? "—")</td>
+                                <td>@(string.IsNullOrEmpty(err.Key) ? "—" : err.Key)</td>
+                                <td>@err.Message</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @if (_plan.Keys.Count > 0)
+        {
+            <h3 class="h6">Keys in this file <span class="text-muted fw-normal">(first @_plan.Keys.Count)</span></h3>
+            <div class="border rounded p-2 mb-3 font-monospace small" style="max-height: 16rem; overflow-y: auto;">
+                @foreach (var key in _plan.Keys)
+                {
+                    <div>@key</div>
+                }
+            </div>
+        }
+
+        @if (!_lastWasDryRun)
+        {
+            <a class="btn btn-outline-secondary" href="@($"applications/{Code}/grid")">Open the grid</a>
+        }
+    }
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+
+    private const long MaxBytes = 5 * 1024 * 1024;
+
+    private string _format = "flat";
+    private string _language = "";
+    private string _status = ReviewStates.Draft;
+    private string _category = "";
+    private string _content = "";
+    private string? _fileNote;
+
+    private bool _busy;
+    private bool _dryRunInFlight;
+    private bool _lastWasDryRun = true;
+    private ApiError? _error;
+    private ApiError? _metaError;
+    private ImportTranslationsResult? _plan;
+
+    private IReadOnlyList<string> _languages = Array.Empty<string>();
+    private string? _loadedCode;
+
+    private bool CanSubmit =>
+        !string.IsNullOrWhiteSpace(_language) && !string.IsNullOrWhiteSpace(_content);
+
+    private string ContentSizeNote
+    {
+        get
+        {
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(_content);
+            var kb = bytes / 1024.0;
+            var over = bytes > MaxBytes ? " — over the 5 MB limit, trim the file" : "";
+            return $"{kb:0.#} KB{over}";
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedCode == Code)
+        {
+            return;
+        }
+
+        _loadedCode = Code;
+        _plan = null;
+        _error = null;
+        _content = "";
+        _fileNote = null;
+        await LoadMetaAsync();
+    }
+
+    private async Task LoadMetaAsync()
+    {
+        _metaError = null;
+        var app = await Api.GetApplicationAsync(Code);
+        if (app.IsSuccess)
+        {
+            _languages = app.Value!.EnabledLanguageCodes;
+            if (string.IsNullOrEmpty(_language) && _languages.Count > 0)
+            {
+                _language = app.Value.BaseLanguageCode;
+            }
+        }
+        else
+        {
+            _metaError = app.Error;
+        }
+    }
+
+    private async Task OnFileChangedAsync(InputFileChangeEventArgs e)
+    {
+        _fileNote = null;
+        _error = null;
+        var file = e.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        if (file.Size > MaxBytes)
+        {
+            _fileNote = $"\"{file.Name}\" is {file.Size / 1024.0 / 1024.0:0.#} MB — the limit is 5 MB.";
+            return;
+        }
+
+        try
+        {
+            using var stream = file.OpenReadStream(MaxBytes);
+            using var reader = new StreamReader(stream);
+            _content = await reader.ReadToEndAsync();
+            _fileNote = $"Loaded \"{file.Name}\" ({file.Size / 1024.0:0.#} KB).";
+
+            var guessed = GuessFormat(file.Name);
+            if (guessed is not null)
+            {
+                _format = guessed;
+            }
+        }
+        catch (Exception ex)
+        {
+            _fileNote = $"Could not read \"{file.Name}\": {ex.Message}";
+        }
+    }
+
+    private static string? GuessFormat(string fileName)
+    {
+        var ext = System.IO.Path.GetExtension(fileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".json" => "json",
+            ".csv" => "csv",
+            ".resx" => "resx",
+            ".properties" or ".txt" or ".env" => "flat",
+            _ => null,
+        };
+    }
+
+    private async Task RunAsync(bool dryRun)
+    {
+        _busy = true;
+        _dryRunInFlight = dryRun;
+        _error = null;
+        if (dryRun)
+        {
+            _plan = null;
+        }
+
+        var request = new ImportTranslationsRequest(
+            _format,
+            _language,
+            _content,
+            string.IsNullOrWhiteSpace(_category) ? null : _category.Trim(),
+            _status,
+            dryRun);
+
+        var result = await Api.ImportTranslationsAsync(Code, request);
+        _busy = false;
+
+        if (result.IsSuccess)
+        {
+            _plan = result.Value;
+            _lastWasDryRun = dryRun;
+            if (!dryRun)
+            {
+                var v = result.Value!;
+                Toasts.ShowSuccess(
+                    $"Imported {_language}: {v.CreatedKeys} keys, {v.CreatedStrings} new + {v.UpdatedStrings} updated strings" +
+                    (v.Skipped > 0 ? $", {v.Skipped} skipped" : "") + ".");
+            }
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

@@ -77,7 +77,7 @@ public sealed record TranslationKeyDto(
 
 public sealed record CreateTranslationKeyRequest(
     string KeyName,
-    string Category,
+    string? Category = null,
     string? Description = null,
     string? CreatedBy = null);
 
@@ -105,7 +105,19 @@ public sealed record UpsertTranslationStringRequest(string Value, string? Update
 
 // ---- Management: grid ------------------------------------------------
 
-public sealed record TranslationValueDto(string Value, string Status);
+/// <summary>
+/// One grid cell. <paramref name="Source"/> is <c>"app"</c> for a string that belongs to the
+/// application in view, or <c>"shared:&lt;code&gt;"</c> when the value is borrowed from a shared
+/// application's published set (read-only here — edit it on that application's grid).
+/// </summary>
+public sealed record TranslationValueDto(string Value, string Status, string? Source = null)
+{
+    /// <summary>The shared application code when <see cref="Source"/> is <c>shared:&lt;code&gt;</c>, else <c>null</c>.</summary>
+    public string? BorrowedFrom =>
+        Source is { } s && s.StartsWith("shared:", StringComparison.Ordinal) ? s["shared:".Length..] : null;
+
+    public bool IsBorrowed => BorrowedFrom is not null;
+}
 
 public sealed record TranslationRowDto(
     Guid KeyId,
@@ -145,6 +157,91 @@ public sealed record PublishTranslationsRequest(string Application, string? Lang
 
 public sealed record PublishTranslationsResult(int Published);
 
+// ---- Management: publish diff preview ------------------------------
+
+/// <summary>One pending delivery change for a <c>(application, language)</c> pair.</summary>
+public sealed record PublishPreviewChangeDto(
+    string Key,
+    string? CurrentValue,
+    string NewValue,
+    string Kind);
+
+public sealed record PublishPreviewResult(
+    string Application,
+    string Language,
+    IReadOnlyList<PublishPreviewChangeDto> Changes,
+    int AddedCount,
+    int ChangedCount);
+
+// ---- Language suggestions + bulk add ------------------------------
+
+/// <summary>An entry from the static standard-language suggestion list.</summary>
+public sealed record LanguageSuggestionDto(string Code, string Name, bool IsRtl);
+
+public sealed record BulkLanguageItem(
+    string Code,
+    string Name,
+    string? FallbackCode = null,
+    bool? IsRtl = null);
+
+public sealed record BulkLanguagesRequest(IReadOnlyList<BulkLanguageItem> Languages);
+
+public sealed record BulkLanguagesResult(
+    IReadOnlyList<string> Created,
+    IReadOnlyList<string> Skipped);
+
+// ---- Import ------------------------------------------------------
+
+/// <summary>
+/// Body for <c>POST /api/applications/{app}/import</c>. <paramref name="Format"/> is one of
+/// <c>json</c> / <c>flat</c> / <c>csv</c> / <c>resx</c>. <paramref name="DryRun"/> plans only.
+/// </summary>
+public sealed record ImportTranslationsRequest(
+    string Format,
+    string Language,
+    string Content,
+    string? Category = null,
+    string? Status = null,
+    bool DryRun = false);
+
+public sealed record ImportErrorDto(int? Line, string? Key, string Message);
+
+public sealed record ImportTranslationsResult(
+    int CreatedKeys,
+    int CreatedStrings,
+    int UpdatedStrings,
+    int Skipped,
+    IReadOnlyList<ImportErrorDto> Errors,
+    IReadOnlyList<string> Keys);
+
+public static class ImportFormats
+{
+    public static readonly IReadOnlyList<(string Value, string Label)> All = new[]
+    {
+        ("json", "JSON (nested)"),
+        ("flat", "Flat key=value"),
+        ("csv", "CSV (key,value)"),
+        ("resx", "RESX"),
+    };
+}
+
+// ---- Bulk review ------------------------------------------------
+
+/// <summary>
+/// Body for <c>POST /api/applications/{app}/review-bulk</c>. At least one of
+/// <paramref name="Language"/> / <paramref name="Category"/> / <paramref name="KeyIds"/> must be
+/// set or the server answers <c>400</c>. <paramref name="Action"/> is a <see cref="ReviewActions"/>
+/// verb (<c>submit</c> / <c>approve</c> / <c>reject</c> / <c>reopen</c> / <c>publish</c>).
+/// </summary>
+public sealed record ReviewBulkRequest(
+    string Action,
+    string? Language = null,
+    string? Category = null,
+    IReadOnlyList<Guid>? KeyIds = null,
+    string? ReviewedBy = null);
+
+public sealed record ReviewBulkResult(int Transitioned, int Skipped);
+
 // ---- Client delivery ------------------------------------------------
 
 public sealed record PublishedTranslationsResponse(
@@ -159,7 +256,7 @@ public sealed record PublishedDelivery(PublishedTranslationsResponse Body, strin
 
 public sealed record AuditEntryDto(
     Guid Id,
-    Guid ProjectId,
+    Guid ApplicationId,
     string EntityType,
     Guid EntityId,
     string Action,

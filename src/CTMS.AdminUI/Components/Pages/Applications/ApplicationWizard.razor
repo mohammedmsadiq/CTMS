@@ -1,0 +1,372 @@
+@page "/applications/new"
+@attribute [Authorize(Policy = AuthorizationPolicies.CanAdminProjects)]
+@inject CtmsApiClient Api
+@inject NavigationManager Nav
+@inject ToastService Toasts
+
+<PageTitle>New application — CTMS Admin</PageTitle>
+
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="applications">Applications</a></li>
+        <li class="breadcrumb-item active" aria-current="page">New</li>
+    </ol>
+</nav>
+
+<PageHeader Title="Create an application"
+           Lead="A short guided flow: name it, pick its languages, then load or start entering translations." />
+
+<ol class="wizard-steps list-unstyled d-flex flex-wrap gap-2 mb-4">
+    @foreach (var (index, label) in Steps)
+    {
+        <li class="badge rounded-pill @(index == _step ? "text-bg-primary" : index < _step ? "text-bg-success" : "text-bg-light border")">
+            @(index + 1). @label
+        </li>
+    }
+</ol>
+
+@if (_step == 0)
+{
+    <div class="card">
+        <div class="card-body">
+            <h2 class="h5">Step 1 — Name &amp; kind</h2>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="w-name">Name</label>
+                    <input id="w-name" class="form-control" value="@_name" @oninput="OnNameInput" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="w-code">Code <span class="text-muted">(URL slug — edit if you like)</span></label>
+                    <input id="w-code" class="form-control" @bind="CodeInput" @bind:event="oninput" placeholder="derived from name" />
+                    @if (!string.IsNullOrEmpty(_code) && !CodeLooksValid)
+                    {
+                        <div class="text-danger small mt-1">Lower-case letters, digits and single hyphens only.</div>
+                    }
+                </div>
+                <div class="col-12">
+                    <label class="form-label" for="w-desc">Description <span class="text-muted">(optional)</span></label>
+                    <input id="w-desc" class="form-control" @bind="_description" />
+                </div>
+                <div class="col-12 form-check ms-1">
+                    <input class="form-check-input" type="checkbox" id="w-shared" @bind="_isShared" />
+                    <label class="form-check-label" for="w-shared">
+                        <strong>Shared</strong> — this application's published strings merge into every other application's delivery (use for common UI text).
+                    </label>
+                </div>
+            </div>
+            <div class="d-flex gap-2 mt-4">
+                <a class="btn btn-link" href="applications">Cancel</a>
+                <button class="btn btn-primary ms-auto" disabled="@(!Step1Valid)" @onclick="() => _step = 1">Next: languages</button>
+            </div>
+        </div>
+    </div>
+}
+else if (_step == 1)
+{
+    <div class="card">
+        <div class="card-body">
+            <h2 class="h5">Step 2 — Languages</h2>
+            <p class="text-muted small">
+                Tick every language <code>@EffectiveCode</code> should support. The first one ticked becomes its base language.
+            </p>
+
+            @if (_langLoading)
+            {
+                <LoadingSpinner Message="Loading languages…" />
+            }
+            else
+            {
+                @if (_catalogue.Count > 0)
+                {
+                    <h3 class="h6">Already in the catalogue</h3>
+                    <div class="d-flex flex-wrap gap-3 mb-3">
+                        @foreach (var lang in _catalogue)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@($"cat-{lang.Code}")"
+                                       checked="@IsPicked(lang.Code)"
+                                       @onchange="e => TogglePick(lang.Code, lang.Name, lang.IsRtl, (bool)e.Value!)" />
+                                <label class="form-check-label" for="@($"cat-{lang.Code}")">
+                                    @lang.Name <code>@lang.Code</code>
+                                    @if (lang.IsRtl)
+                                    {
+                                        <span class="badge text-bg-light ms-1">RTL</span>
+                                    }
+                                </label>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (_suggestions.Count > 0)
+                {
+                    <h3 class="h6">@(_catalogue.Count == 0 ? "Suggested languages" : "Add from the standard list")</h3>
+                    <div class="d-flex flex-wrap gap-3 mb-3">
+                        @foreach (var s in _suggestions.Where(s => _catalogue.All(c => !CodeEq(c.Code, s.Code))))
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@($"sug-{s.Code}")"
+                                       checked="@IsPicked(s.Code)"
+                                       @onchange="e => TogglePick(s.Code, s.Name, s.IsRtl, (bool)e.Value!)" />
+                                <label class="form-check-label" for="@($"sug-{s.Code}")">
+                                    @s.Name <code>@s.Code</code>
+                                    @if (s.IsRtl)
+                                    {
+                                        <span class="badge text-bg-light ms-1">RTL</span>
+                                    }
+                                </label>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <h3 class="h6">Add a custom language</h3>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-sm-3">
+                        <label class="form-label small mb-1" for="w-cc">Code</label>
+                        <input id="w-cc" class="form-control form-control-sm" placeholder="pt-BR" @bind="_customCode" />
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small mb-1" for="w-cn">Name</label>
+                        <input id="w-cn" class="form-control form-control-sm" placeholder="Portuguese (Brazil)" @bind="_customName" />
+                    </div>
+                    <div class="col-sm-3 form-check ms-2 mb-1">
+                        <input class="form-check-input" type="checkbox" id="w-cr" @bind="_customRtl" />
+                        <label class="form-check-label" for="w-cr">Right-to-left</label>
+                    </div>
+                    <div class="col-sm-2">
+                        <button class="btn btn-outline-secondary btn-sm w-100"
+                                disabled="@(string.IsNullOrWhiteSpace(_customCode) || string.IsNullOrWhiteSpace(_customName))"
+                                @onclick="AddCustom">Add</button>
+                    </div>
+                </div>
+
+                @if (_picked.Count > 0)
+                {
+                    <div class="alert alert-light border mt-3">
+                        <strong>@_picked.Count picked.</strong>
+                        Base: <code>@_picked[0].Code</code>.
+                        <span class="ms-1">@string.Join(", ", _picked.Select(p => p.Code))</span>
+                    </div>
+                }
+            }
+
+            <ErrorAlert Error="_error" />
+
+            <div class="d-flex gap-2 mt-4">
+                <button class="btn btn-link" @onclick="() => _step = 0">Back</button>
+                <button class="btn btn-primary ms-auto" disabled="@(_picked.Count == 0 || _saving)" @onclick="CreateAsync">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                    }
+                    Create application
+                </button>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="card">
+        <div class="card-body">
+            <h2 class="h5">Step 3 — Add translations</h2>
+            <p class="text-muted">
+                <code>@_createdCode</code> is ready with @_picked.Count language@(_picked.Count == 1 ? "" : "s").
+                How do you want to fill it?
+            </p>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <a class="card h-100 text-decoration-none" href="@($"applications/{_createdCode}/import")">
+                        <div class="card-body">
+                            <h3 class="h6">Import existing translations</h3>
+                            <p class="text-muted small mb-0">Paste or upload a JSON / flat / CSV / RESX file for one language.</p>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-6">
+                    <a class="card h-100 text-decoration-none" href="@($"applications/{_createdCode}/grid")">
+                        <div class="card-body">
+                            <h3 class="h6">Start with the grid</h3>
+                            <p class="text-muted small mb-0">Add keys and type values by hand.</p>
+                        </div>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly string[] PreTicked = { "en-GB", "fr-FR", "de-DE", "es-ES" };
+
+    private int _step;
+
+    private string _name = "";
+    private string _code = "";
+    private bool _codeEdited;
+    private string _description = "";
+    private bool _isShared;
+
+    private bool _langLoading = true;
+    private IReadOnlyList<LanguageDto> _catalogue = Array.Empty<LanguageDto>();
+    private IReadOnlyList<LanguageSuggestionDto> _suggestions = Array.Empty<LanguageSuggestionDto>();
+    private readonly List<PickedLang> _picked = new();
+
+    private string _customCode = "";
+    private string _customName = "";
+    private bool _customRtl;
+
+    private bool _saving;
+    private ApiError? _error;
+    private string? _createdCode;
+
+    private static IEnumerable<(int Index, string Label)> Steps =>
+        new[] { (0, "Details"), (1, "Languages"), (2, "Translations") };
+
+    private string EffectiveCode => string.IsNullOrWhiteSpace(_code) ? Slugify(_name) : _code.Trim();
+
+    private bool CodeLooksValid =>
+        System.Text.RegularExpressions.Regex.IsMatch(EffectiveCode, "^[a-z0-9]+(?:-[a-z0-9]+)*$");
+
+    private bool Step1Valid => !string.IsNullOrWhiteSpace(_name) && CodeLooksValid;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var cat = await Api.GetLanguagesAsync(includeInactive: false);
+        if (cat.IsSuccess)
+        {
+            _catalogue = cat.Value!;
+        }
+
+        // Show suggestions when the catalogue is empty or sparse.
+        if (_catalogue.Count < 4)
+        {
+            var sug = await Api.GetLanguageSuggestionsAsync();
+            if (sug.IsSuccess)
+            {
+                _suggestions = sug.Value!;
+            }
+        }
+
+        // Pre-tick the common set from whichever source has them.
+        foreach (var code in PreTicked)
+        {
+            var fromCat = _catalogue.FirstOrDefault(c => CodeEq(c.Code, code));
+            if (fromCat is not null)
+            {
+                TogglePick(fromCat.Code, fromCat.Name, fromCat.IsRtl, true);
+                continue;
+            }
+
+            var fromSug = _suggestions.FirstOrDefault(s => CodeEq(s.Code, code));
+            if (fromSug is not null)
+            {
+                TogglePick(fromSug.Code, fromSug.Name, fromSug.IsRtl, true);
+            }
+        }
+
+        _langLoading = false;
+    }
+
+    private void OnNameInput(ChangeEventArgs e)
+    {
+        _name = e.Value?.ToString() ?? "";
+        if (!_codeEdited)
+        {
+            _code = Slugify(_name);
+        }
+    }
+
+    // Two-way bound to the code input; a manual edit stops name-driven auto-fill.
+    private string CodeInput
+    {
+        get => _code;
+        set
+        {
+            _code = value;
+            _codeEdited = true;
+        }
+    }
+
+    private bool IsPicked(string code) => _picked.Any(p => CodeEq(p.Code, code));
+
+    private void TogglePick(string code, string name, bool isRtl, bool on)
+    {
+        var existing = _picked.FindIndex(p => CodeEq(p.Code, code));
+        if (on && existing < 0)
+        {
+            _picked.Add(new PickedLang(code, name, isRtl));
+        }
+        else if (!on && existing >= 0)
+        {
+            _picked.RemoveAt(existing);
+        }
+    }
+
+    private void AddCustom()
+    {
+        var code = _customCode.Trim();
+        if (code.Length == 0 || IsPicked(code))
+        {
+            _customCode = "";
+            _customName = "";
+            _customRtl = false;
+            return;
+        }
+
+        _picked.Add(new PickedLang(code, _customName.Trim(), _customRtl));
+        _customCode = "";
+        _customName = "";
+        _customRtl = false;
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        _error = null;
+
+        var bulk = await Api.BulkCreateLanguagesAsync(new BulkLanguagesRequest(
+            _picked.Select(p => new BulkLanguageItem(p.Code, p.Name, IsRtl: p.IsRtl)).ToArray()));
+        if (bulk.IsFailure)
+        {
+            _saving = false;
+            _error = bulk.Error;
+            return;
+        }
+
+        var picked = _picked.Select(p => p.Code).ToArray();
+        var request = new CreateApplicationRequest(
+            _name.Trim(),
+            picked[0],
+            string.IsNullOrWhiteSpace(_code) ? null : _code.Trim(),
+            string.IsNullOrWhiteSpace(_description) ? null : _description.Trim(),
+            _isShared,
+            picked);
+
+        var created = await Api.CreateApplicationAsync(request);
+        _saving = false;
+
+        if (created.IsSuccess)
+        {
+            _createdCode = created.Value!.Code;
+            Toasts.ShowSuccess($"Created \"{created.Value.Name}\" with {picked.Length} language{(picked.Length == 1 ? "" : "s")}.");
+            _step = 2;
+        }
+        else
+        {
+            _error = created.Error;
+        }
+    }
+
+    private static bool CodeEq(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    private static string Slugify(string value)
+    {
+        var lowered = value.Trim().ToLowerInvariant();
+        var slug = System.Text.RegularExpressions.Regex.Replace(lowered, "[^a-z0-9]+", "-").Trim('-');
+        return slug;
+    }
+
+    private sealed record PickedLang(string Code, string Name, bool IsRtl);
+}

@@ -42,6 +42,29 @@
     background-color: var(--bs-warning-bg-subtle);
 }
 
+.grid-cell.borrowed {
+    background-color: var(--bs-tertiary-bg);
+}
+
+.grid-cell.borrowed .cell-value {
+    color: var(--bs-secondary-color);
+    font-style: italic;
+}
+
+.sel-col {
+    width: 2.5rem;
+    text-align: center;
+}
+
+.act-col {
+    width: 1%;
+    white-space: nowrap;
+}
+
+.meta-edit-row > td {
+    background-color: var(--bs-tertiary-bg);
+}
+
 .cell-view {
     min-height: 2.25rem;
 }

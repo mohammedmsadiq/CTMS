@@ -1,0 +1,60 @@
+@implements IDisposable
+@inject ToastService Toasts
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1090;">
+    @foreach (var toast in Toasts.Current)
+    {
+        <div class="toast show align-items-center border-0 mb-2 text-bg-@Css(toast.Level)" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">@toast.Message</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                        aria-label="Dismiss" @onclick="() => Toasts.Dismiss(toast.Id)"></button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly List<System.Timers.Timer> _timers = new();
+    private readonly HashSet<Guid> _scheduled = new();
+
+    protected override void OnInitialized() => Toasts.OnChange += OnChanged;
+
+    private void OnChanged()
+    {
+        foreach (var toast in Toasts.Current)
+        {
+            if (_scheduled.Add(toast.Id))
+            {
+                var timer = new System.Timers.Timer(5000) { AutoReset = false };
+                var id = toast.Id;
+                timer.Elapsed += (_, _) =>
+                {
+                    Toasts.Dismiss(id);
+                    timer.Dispose();
+                };
+                _timers.Add(timer);
+                timer.Start();
+            }
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static string Css(ToastLevel level) => level switch
+    {
+        ToastLevel.Success => "success",
+        ToastLevel.Warning => "warning",
+        ToastLevel.Error => "danger",
+        _ => "secondary",
+    };
+
+    public void Dispose()
+    {
+        Toasts.OnChange -= OnChanged;
+        foreach (var timer in _timers)
+        {
+            timer.Dispose();
+        }
+    }
+}

@@ -6,14 +6,17 @@
 
 <PageTitle>Applications — CTMS Admin</PageTitle>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">Applications</h1>
-    <AuthorizeView Policy="@AuthorizationPolicies.CanAdminProjects">
-        <button class="btn btn-primary" @onclick="ToggleCreate" disabled="@(_languages is null)">
-            @(_showCreate ? "Close" : "New application")
-        </button>
-    </AuthorizeView>
-</div>
+<PageHeader Title="Applications"
+           Lead="Each application owns its own translation keys. Shared applications merge their published strings into every other application's delivery.">
+    <Actions>
+        <AuthorizeView Policy="@AuthorizationPolicies.CanAdminProjects">
+            <a class="btn btn-primary" href="applications/new">New application</a>
+            <button class="btn btn-outline-secondary" @onclick="ToggleCreate" disabled="@(_languages is null)">
+                @(_showCreate ? "Close quick form" : "Quick form")
+            </button>
+        </AuthorizeView>
+    </Actions>
+</PageHeader>
 
 @if (_showCreate && _languages is not null)
 {
@@ -95,7 +98,12 @@ else if (_loadError is not null)
 }
 else if (_apps is { Count: 0 })
 {
-    <EmptyState Title="No applications yet" Hint="Create the first application to start managing translations." />
+    <EmptyState Title="No applications yet"
+                Hint="Create your first application — the guided flow sets up its languages and lets you import translations straight away.">
+        <AuthorizeView Policy="@AuthorizationPolicies.CanAdminProjects">
+            <a class="btn btn-primary" href="applications/new">Create your first application</a>
+        </AuthorizeView>
+    </EmptyState>
 }
 else if (_apps is not null)
 {

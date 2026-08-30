@@ -74,6 +74,16 @@ public sealed class CtmsApiClient(HttpClient http)
         string code, UpdateLanguageRequest request, CancellationToken ct = default) =>
         SendAsync<LanguageDto>(HttpMethod.Patch, $"api/languages/{Esc(code)}", request, ct);
 
+    /// <summary>The static standard-language suggestion list (anonymous in the default config).</summary>
+    public Task<Result<IReadOnlyList<LanguageSuggestionDto>>> GetLanguageSuggestionsAsync(
+        CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<LanguageSuggestionDto>>("api/languages/suggestions", ct);
+
+    /// <summary>Idempotently add a set of languages to the global catalogue.</summary>
+    public Task<Result<BulkLanguagesResult>> BulkCreateLanguagesAsync(
+        BulkLanguagesRequest request, CancellationToken ct = default) =>
+        SendAsync<BulkLanguagesResult>(HttpMethod.Post, "api/languages/bulk", request, ct);
+
     // ---- Translation keys ---------------------------------------
 
     public Task<Result<PagedResult<TranslationKeyDto>>> GetKeysAsync(
@@ -100,6 +110,23 @@ public sealed class CtmsApiClient(HttpClient http)
 
     public Task<Result> DeleteKeyAsync(string application, Guid keyId, CancellationToken ct = default) =>
         SendAsync(HttpMethod.Delete, $"api/applications/{Esc(application)}/keys/{keyId}", ct);
+
+    // ---- Import --------------------------------------------------
+
+    /// <summary>
+    /// Bulk-import translations for one language. <c>dryRun: true</c> returns a plan without
+    /// persisting. A <c>400</c> carries the offending line in <see cref="ApiError.Detail"/>.
+    /// </summary>
+    public Task<Result<ImportTranslationsResult>> ImportTranslationsAsync(
+        string application, ImportTranslationsRequest request, CancellationToken ct = default) =>
+        SendAsync<ImportTranslationsResult>(
+            HttpMethod.Post, $"api/applications/{Esc(application)}/import", request, ct);
+
+    /// <summary>Apply one review verb to every string matching a filter (language / category / keyIds).</summary>
+    public Task<Result<ReviewBulkResult>> ReviewBulkAsync(
+        string application, ReviewBulkRequest request, CancellationToken ct = default) =>
+        SendAsync<ReviewBulkResult>(
+            HttpMethod.Post, $"api/applications/{Esc(application)}/review-bulk", request, ct);
 
     // ---- Translation strings -------------------------------
 
@@ -143,13 +170,14 @@ public sealed class CtmsApiClient(HttpClient http)
 
     public Task<Result<PagedResult<TranslationRowDto>>> GetGridAsync(
         string? application, string? category, string? language, string? search,
-        int skip, int take, CancellationToken ct = default) =>
+        int skip, int take, string? status = null, CancellationToken ct = default) =>
         GetAsync<PagedResult<TranslationRowDto>>(
             "api/translations" + Query(
                 ("application", application),
                 ("category", string.IsNullOrWhiteSpace(category) ? null : category),
                 ("language", string.IsNullOrWhiteSpace(language) ? null : language),
                 ("search", string.IsNullOrWhiteSpace(search) ? null : search),
+                ("status", string.IsNullOrWhiteSpace(status) ? null : status),
                 ("skip", skip.ToString()),
                 ("take", take.ToString())),
             ct);
@@ -178,6 +206,18 @@ public sealed class CtmsApiClient(HttpClient http)
             HttpMethod.Post,
             "api/translations/publish",
             new PublishTranslationsRequest(application, string.IsNullOrWhiteSpace(language) ? null : language),
+            ct);
+
+    /// <summary>
+    /// The pending delivery diff for a <c>(application, language)</c> pair — what a publish would
+    /// add or change. <paramref name="language"/> is required by the server.
+    /// </summary>
+    public Task<Result<PublishPreviewResult>> GetPublishPreviewAsync(
+        string application, string language, CancellationToken ct = default) =>
+        GetAsync<PublishPreviewResult>(
+            "api/translations/publish/preview" + Query(
+                ("application", application),
+                ("language", language)),
             ct);
 
     // ---- History / audit trail --------------------------------

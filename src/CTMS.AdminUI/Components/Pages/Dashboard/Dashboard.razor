@@ -5,19 +5,20 @@
 
 <PageTitle>Dashboard — CTMS Admin</PageTitle>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">Dashboard</h1>
-    <div style="min-width: 16rem;">
-        <label class="form-label small mb-1" for="dash-app">Scope</label>
-        <select id="dash-app" class="form-select form-select-sm" value="@(Application ?? "")" @onchange="OnScopeChanged">
-            <option value="">All applications</option>
-            @foreach (var app in _apps)
-            {
-                <option value="@app.Code">@app.Name (@app.Code)</option>
-            }
-        </select>
-    </div>
-</div>
+<PageHeader Title="Dashboard" Lead="Translation coverage across your applications and languages.">
+    <Actions>
+        <div style="min-width: 16rem;">
+            <label class="form-label small mb-1" for="dash-app">Scope</label>
+            <select id="dash-app" class="form-select form-select-sm" value="@(Application ?? "")" @onchange="OnScopeChanged">
+                <option value="">All applications</option>
+                @foreach (var app in _apps)
+                {
+                    <option value="@app.Code">@app.Name (@app.Code)</option>
+                }
+            </select>
+        </div>
+    </Actions>
+</PageHeader>
 
 @if (_loading)
 {

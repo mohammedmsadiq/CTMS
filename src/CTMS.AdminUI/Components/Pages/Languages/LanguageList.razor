@@ -5,10 +5,10 @@
 
 <PageTitle>Languages — CTMS Admin</PageTitle>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">Languages</h1>
-    <div class="d-flex align-items-center gap-3">
-        <div class="form-check mb-0">
+<PageHeader Title="Languages"
+           Lead="The global catalogue. Languages are shared across every application; enable them per application from its detail page. There is no delete — set a language inactive instead.">
+    <Actions>
+        <div class="form-check mb-0 me-2 align-self-center">
             <input class="form-check-input" type="checkbox" id="incInactive"
                    checked="@_includeInactive" @onchange="ToggleInactiveAsync" />
             <label class="form-check-label small" for="incInactive">Show inactive</label>
@@ -18,13 +18,8 @@
                 @(_showCreate ? "Close" : "Add language")
             </button>
         </AuthorizeView>
-    </div>
-</div>
-
-<p class="text-muted small">
-    The global language catalogue. Languages are shared across every application; enable them
-    per application from its detail page. There is no delete — set a language inactive instead.
-</p>
+    </Actions>
+</PageHeader>
 
 @if (_showCreate)
 {
