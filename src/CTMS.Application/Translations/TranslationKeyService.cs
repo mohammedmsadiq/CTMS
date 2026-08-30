@@ -92,11 +92,10 @@ public sealed class TranslationKeyService
             throw new ValidationException("A key name may only contain letters, digits, '.', '-' and '_'.");
         }
 
-        var category = request.Category?.Trim() ?? string.Empty;
-        if (category.Length == 0)
-        {
-            throw new ValidationException("A category is required.");
-        }
+        // Category is optional on the wire: derive one from the key-name prefix when it is blank.
+        var category = string.IsNullOrWhiteSpace(request.Category)
+            ? CategorySuggestion.FromKeyName(keyName)
+            : request.Category.Trim();
 
         var project = await ResolveApplicationAsync(applicationCode, cancellationToken)
             ?? throw new NotFoundException($"Application '{applicationCode}' was not found.");

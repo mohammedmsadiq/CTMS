@@ -21,31 +21,60 @@ internal static class RequestBodySizeLimit
 
     public const long DefaultMaxRequestBodyBytes = 262144;
 
+    /// <summary>
+    /// The ceiling for endpoints marked with <see cref="LargeImportBody"/> (the bulk import). Import
+    /// files routinely exceed the 256&nbsp;KB host default, so they are allowed up to this instead
+    /// (<c>Limits:MaxImportBodyBytes</c>, default 5&nbsp;MB).
+    /// </summary>
+    public const string MaxImportBodyBytesKey = "Limits:MaxImportBodyBytes";
+
+    public const long DefaultMaxImportBodyBytes = 5 * 1024 * 1024;
+
     public static long MaxRequestBodyBytes(this IConfiguration configuration)
     {
         var configured = configuration.GetValue(MaxRequestBodyBytesKey, DefaultMaxRequestBodyBytes);
         return configured > 0 ? configured : DefaultMaxRequestBodyBytes;
     }
 
+    public static long MaxImportBodyBytes(this IConfiguration configuration)
+    {
+        var configured = configuration.GetValue(MaxImportBodyBytesKey, DefaultMaxImportBodyBytes);
+        return configured > 0 ? configured : DefaultMaxImportBodyBytes;
+    }
+
+    /// <summary>
+    /// Endpoint metadata marker: the body-size middleware lets a request to this endpoint run up to
+    /// <see cref="MaxImportBodyBytesKey"/> instead of the global <see cref="MaxRequestBodyBytesKey"/>.
+    /// </summary>
+    public sealed class LargeImportBody;
+
     /// <summary>
     /// Short-circuits a request whose declared or streamed body exceeds <paramref name="maxBytes"/>
     /// with <c>413 Payload Too Large</c>.
     /// </summary>
-    public static IApplicationBuilder UseCtmsRequestBodySizeLimit(this IApplicationBuilder app, long maxBytes)
+    public static IApplicationBuilder UseCtmsRequestBodySizeLimit(
+        this IApplicationBuilder app,
+        long maxBytes,
+        long importMaxBytes)
     {
         return app.Use(async (context, next) =>
         {
+            // The bulk-import endpoint opts in to a larger ceiling via endpoint metadata.
+            var limit = context.GetEndpoint()?.Metadata.GetMetadata<LargeImportBody>() is not null
+                ? importMaxBytes
+                : maxBytes;
+
             // Tighten the per-request limit too, so a chunked body with no Content-Length is
             // still capped when it is actually read.
             var sizeFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
             if (sizeFeature is { IsReadOnly: false })
             {
-                sizeFeature.MaxRequestBodySize = maxBytes;
+                sizeFeature.MaxRequestBodySize = limit;
             }
 
-            if (context.Request.ContentLength is { } declared && declared > maxBytes)
+            if (context.Request.ContentLength is { } declared && declared > limit)
             {
-                await WriteTooLargeAsync(context, maxBytes);
+                await WriteTooLargeAsync(context, limit);
                 return;
             }
 
@@ -55,7 +84,7 @@ internal static class RequestBodySizeLimit
             }
             catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
             {
-                await WriteTooLargeAsync(context, maxBytes);
+                await WriteTooLargeAsync(context, limit);
             }
         });
     }

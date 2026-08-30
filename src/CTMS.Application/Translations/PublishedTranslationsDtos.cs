@@ -17,8 +17,12 @@ public sealed record PublishedTranslationsResponse(
     string Language,
     IReadOnlyDictionary<string, string> Translations);
 
-/// <summary>One language cell in a management grid row.</summary>
-public sealed record TranslationValueDto(string Value, string Status);
+/// <summary>
+/// One language cell in a management grid row. <see cref="Source"/> is <c>app</c> when the value
+/// is the application's own string, or <c>shared:&lt;code&gt;</c> when it comes from a shared
+/// application whose keys are merged into the grid.
+/// </summary>
+public sealed record TranslationValueDto(string Value, string Status, string Source);
 
 /// <summary>One management grid row — a key and its value per enabled language.</summary>
 public sealed record TranslationRowDto(
@@ -57,3 +61,22 @@ public sealed record PublishTranslationsRequest(string Application, string? Lang
 
 /// <summary>Result of a bulk publish.</summary>
 public sealed record PublishTranslationsResult(int Published);
+
+/// <summary>
+/// One entry in a publish preview: what publishing the application's <c>Approved</c> strings for a
+/// language would change in the delivered map. <see cref="Kind"/> is <c>added</c> (the key is not
+/// currently delivered) or <c>changed</c> (a delivered value would differ).
+/// </summary>
+public sealed record PublishPreviewChange(
+    string Key,
+    string? CurrentValue,
+    string NewValue,
+    string Kind);
+
+/// <summary>Response for <c>GET /api/translations/publish/preview</c>.</summary>
+public sealed record PublishPreviewResponse(
+    string Application,
+    string Language,
+    IReadOnlyList<PublishPreviewChange> Changes,
+    int AddedCount,
+    int ChangedCount);

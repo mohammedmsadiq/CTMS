@@ -55,15 +55,33 @@ internal static class TranslationEndpoints
                 string? category = null,
                 string? language = null,
                 string? search = null,
+                string? status = null,
                 int skip = 0,
                 int take = 50) =>
             {
                 var page = await service.GetGridAsync(
-                    application, category, language, search, skip, take, cancellationToken);
+                    application, category, language, search, skip, take, status, cancellationToken);
                 return page is null ? Results.NotFound() : Results.Ok(page);
             })
             .WithName("ListTranslationGrid")
             .Produces<PagedResult<TranslationRowDto>>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthorizationPolicies.CanRead);
+
+        // ---- Management: publish preview (diff before publishing) -----------------------
+        group.MapGet("/publish/preview", async (
+                PublishedTranslationsService service,
+                CancellationToken cancellationToken,
+                string? application = null,
+                string? language = null) =>
+            {
+                var preview = await service.GetPublishPreviewAsync(application, language, cancellationToken);
+                return preview is null ? Results.NotFound() : Results.Ok(preview);
+            })
+            .WithName("PreviewTranslationsPublish")
+            .Produces<PublishPreviewResponse>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization(AuthorizationPolicies.CanRead);
 

@@ -50,7 +50,7 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
     }
 
     [Fact]
-    public async Task Missing_category_on_a_key_is_400()
+    public async Task Missing_category_on_a_key_is_derived_from_the_key_name_prefix()
     {
         using var admin = Factory.ClientAs(AuthRoles.Admin);
         var app = await admin.CreateApplicationAsync();
@@ -59,7 +59,9 @@ public sealed class ValidationAndNotFoundTests(MongoFixture mongo) : Integration
             $"/api/applications/{app.Code}/keys",
             new CreateTranslationKeyRequest("valid.key", ""));
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var key = (await response.Content.ReadFromJsonAsync<TranslationKeyDto>())!;
+        Assert.Equal("Valid", key.Category);
     }
 
     [Fact]

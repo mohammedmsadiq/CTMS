@@ -23,6 +23,23 @@ internal static class LanguageEndpoints
             .Produces<IReadOnlyList<LanguageDto>>()
             .GatePublicRead(publicReads);
 
+        // Static BCP-47 catalogue for the Admin UI wizard. Anonymous by default (Auth:PublicBundleReads).
+        group.MapGet("/suggestions", (LanguageService languages) => Results.Ok(languages.Suggestions()))
+            .WithName("ListLanguageSuggestions")
+            .Produces<IReadOnlyList<LanguageSuggestionDto>>()
+            .GatePublicRead(publicReads);
+
+        // Idempotent bulk register: existing codes are skipped, not errored.
+        group.MapPost("/bulk", async (
+                BulkCreateLanguagesRequest request,
+                LanguageService languages,
+                CancellationToken cancellationToken) =>
+                Results.Ok(await languages.BulkCreateAsync(request, cancellationToken)))
+            .WithName("BulkCreateLanguages")
+            .Produces<BulkCreateLanguagesResult>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireAuthorization(AuthorizationPolicies.CanManageContent);
+
         group.MapGet("/{code}", async (string code, LanguageService languages, CancellationToken cancellationToken) =>
             {
                 var language = await languages.GetAsync(code, cancellationToken);

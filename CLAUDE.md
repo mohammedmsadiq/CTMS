@@ -45,7 +45,8 @@ CTMS.Api  ──►  CTMS.Application  ──►  CTMS.Domain
   `[InternalsVisibleTo("CTMS.Infrastructure")]` lets the persistence layer stamp timestamps.
 - **CTMS.Application** — use-case orchestration (`ProjectService`, `LanguageService`,
   `TranslationKeyService`, `TranslationStringService`, `PublishedTranslationsService`,
-  `AuditService`), DTOs, and the ports it needs (`IProjectRepository`, `ILanguageRepository`,
+  `TranslationImportService`, `AuditService`), DTOs, and the ports it needs
+  (`IProjectRepository`, `ILanguageRepository`,
   `ITranslationKeyRepository`, `ITranslationStringRepository`, `IAuditRepository`,
   `IPublishedTranslationsCache`, `IUnitOfWork`). DTOs — never entities — cross the API
   boundary. `AddApplication()` registers the services.
@@ -71,7 +72,12 @@ CTMS.Api  ──►  CTMS.Application  ──►  CTMS.Domain
   language exists and is active).
 - **`TranslationKey`** (collection `translationKeys`, unique `(projectId, keyName)`,
   non-unique `(projectId, category)`) — `KeyName` (dotted path, `[A-Za-z0-9_.-]+`), `Category`
-  (required — `Common`, `Navigation`, `Course`, …), `Description?`, `Active`, `CreatedBy`.
+  (the domain always stores a non-blank value — `Common`, `Navigation`, `Course`, …),
+  `Description?`, `Active`, `CreatedBy`. **`category` is optional on the create API**: when it is
+  null/blank the service derives one from the key-name prefix via
+  `CategorySuggestion.FromKeyName` — the segment before the first `.` title-cased
+  (`course.start` → `Course`, `nav.home.link` → `Nav`), or `General` when the key has no `.`.
+  `PATCH` still sets `category` explicitly and rejects an explicitly-blank value.
 - **`TranslationString`** (collection `translationStrings`, unique
   `(translationKeyId, languageCode)`, plus `(translationKeyId, reviewState, updatedAt desc)`) —
   `LanguageCode` (string), `Value`, `ReviewState` (`Draft` / `NeedsReview` / `Approved` /
@@ -117,6 +123,10 @@ while `Auth:PublicBundleReads` is `true` (default) and require `CanRead` otherwi
 Known exceptions → RFC 7807: `ValidationException`→400, `NotFoundException`→404,
 `SlugAlreadyInUseException`/`ConflictException`/`InvalidReviewTransitionException`→409.
 
+Request bodies are capped at `Limits:MaxRequestBodyBytes` (default 256&nbsp;KB) — over-cap
+requests get `413` before binding. The bulk-import endpoint opts in (via endpoint metadata) to a
+higher ceiling, `Limits:MaxImportBodyBytes` (default 5&nbsp;MB).
+
 **Client delivery** (anonymous by default)
 
 - `GET /api/translations/{application}/{language}` → `{ application, language, translations }`.
@@ -127,6 +137,14 @@ Known exceptions → RFC 7807: `ValidationException`→400, `NotFoundException`�
 
 **Languages** — `GET /api/languages/{code}` (`CanRead`); `POST /api/languages`,
 `PATCH /api/languages/{code}` (`CanManageContent`).
+
+- `GET /api/languages/suggestions` → `LanguageSuggestionDto[]` (`{ code, name, isRtl }`) — a
+  **static** ~40-entry BCP-47 catalogue (`LanguageCatalogue`, never persisted). Anonymous while
+  `Auth:PublicBundleReads` is true, `CanRead` otherwise.
+- `POST /api/languages/bulk` (`CanManageContent`) — body
+  `{ languages: [{ code, name, fallbackCode?, isRtl? }] }` → `{ created: [...codes], skipped:
+  [...codes] }`. Idempotent: existing codes are skipped, not errored; a blank code/name in an
+  entry is `400`.
 
 **Applications** — `GET /api/applications/{code}` (`CanRead`); `POST /api/applications`
 (`CanAdminProjects`); `PATCH /api/applications/{code}`,
@@ -151,11 +169,16 @@ Known exceptions → RFC 7807: `ValidationException`→400, `NotFoundException`�
 
 **Management translations** (`CanRead`, except publish `CanPublish`)
 
-- `GET /api/translations?application=&category=&language=&search=&skip=&take=` →
+- `GET /api/translations?application=&category=&language=&search=&status=&skip=&take=` →
   `PagedResult<TranslationRowDto>`. `TranslationRowDto { keyId, key, category, description?,
-  values: { "<lang>": { value, status }, … } }` — one row per key, a cell per enabled
+  values: { "<lang>": { value, status, source }, … } }` — one row per key, a cell per enabled
   language; missing languages absent from `values`. `search` matches key name OR any value
-  (case-insensitive substring).
+  (case-insensitive substring). `status` (optional, one of the four `ReviewState` names; `400`
+  if invalid) keeps only rows with **≥1 cell** in that state, but each kept row still carries
+  **all** its cells so the grid stays coherent. `source` is `"app"` when the value is the
+  application's own string, or `"shared:<code>"` when it comes from a shared application whose
+  keys are merged into a single-application grid (app-owned keys win a name collision). Client
+  delivery is unaffected — `source` is grid-only.
 - `GET /api/categories?application=` → distinct non-empty categories (`string[]`).
 - `GET /api/dashboard?application=` → `{ applicationCount, languageCount, keyCount,
   coverage: [ { languageCode, languageName, translatedCount, totalKeys, percent, missingCount } ],
@@ -166,10 +189,45 @@ Known exceptions → RFC 7807: `ValidationException`→400, `NotFoundException`�
 - `POST /api/translations/publish` — `{ application, language? }` → `{ published: <count> }`;
   every `Approved` string for the application (and language, if given) → `Published`, audit
   entries written, cache invalidated (shared-app fan-out).
+- `GET /api/translations/publish/preview?application=&language=` (`CanRead`) →
+  `{ application, language, changes: [ { key, currentValue?, newValue, kind } ], addedCount,
+  changedCount }` — what a `publish` for the same args would change in the delivered map, by
+  assembling the current published map and the hypothetical one (the app's `Approved` strings
+  treated as published) and diffing. `kind` is `"added"` (key not currently delivered) or
+  `"changed"` (delivered value differs — reached today only via the fallback chain). `language`
+  is **required** (`400` otherwise); `404` for an unknown/inactive/not-enabled target.
+
+**Bulk import**
+
+- `POST /api/applications/{application}/import` (`CanManageContent`) — body
+  `{ format, language, content, category?, status?, dryRun? }`. `format` ∈ `json` (flat or
+  nested object, flattened with `.`) / `flat` (`key=value` lines; `#` comments and blank lines
+  ignored) / `csv` (header row naming `key` and `value` columns; RFC-4180 quoting) / `resx`
+  (`<data name><value>` elements; comments/`<resheader>`/`xml:space`/typed resources ignored).
+  `language` must be enabled for the application (`404` otherwise). Each parsed `(key, value)`
+  creates the `TranslationKey` if missing (category = request `category`, else derived per the
+  key rule above; `createdBy` from the token) and upserts the `TranslationString` for
+  `(key, language)` at `status` (`Draft` default; `NeedsReview` / `Approved` accepted;
+  `Published` → `400`). `dryRun: true` computes the plan and writes nothing. Response
+  `{ createdKeys, createdStrings, updatedStrings, skipped, errors: [{ line?, key?, message }],
+  keys: [ …first 200 key names ] }`. A body malformed for its `format` → `400` naming the
+  line. Parsers live in `CTMS.Application/Translations/Import` and are HTTP-free.
+
+**Bulk review**
+
+- `POST /api/applications/{application}/review-bulk` (`CanReview`) — body
+  `{ action, language?, category?, keyIds?, reviewedBy? }`; `action` ∈
+  `submit|approve|reject|reopen|publish`. Applies the transition to every string of the
+  application matching the optional filters that is **legal** from its current state — illegal
+  ones are **skipped**, not errored. Writes one audit entry per transitioned string and
+  invalidates the cache once at the end (shared-app fan-out for strings entering/leaving
+  `Published`). Response `{ transitioned, skipped }`. **At least one of `language` / `category`
+  / `keyIds` is required** (`400` otherwise) so an unfiltered mass-approve is not one click.
 
 **History** (`CanRead`) — `GET /api/applications/{application}/history?skip=&take=` →
 `PagedResult<AuditEntryDto>`; `GET /api/applications/{application}/keys/{keyId:guid}/strings/{language}/history`
-→ `AuditEntryDto[]`. `AuditEntryDto` carries `oldValue` / `newValue`.
+→ `AuditEntryDto[]`. `AuditEntryDto` carries `oldValue` / `newValue`, and its owning-application
+id field is **`applicationId`** (the internal `Project` / `ProjectId` names are unchanged).
 
 **Health** — `GET /health` (liveness), `GET /health/ready` (Mongo `ping`, tag `ready`).
 

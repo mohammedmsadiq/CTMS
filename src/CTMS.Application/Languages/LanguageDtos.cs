@@ -24,3 +24,24 @@ public sealed record UpdateLanguageRequest(
     string? FallbackCode = null,
     bool? IsRtl = null,
     bool? Active = null);
+
+/// <summary>One entry in the static BCP-47 language catalogue offered to the Admin UI wizard.</summary>
+public sealed record LanguageSuggestionDto(string Code, string Name, bool IsRtl);
+
+/// <summary>One language to register in a <see cref="BulkCreateLanguagesRequest"/>.</summary>
+public sealed record BulkCreateLanguageItem(
+    string Code,
+    string Name,
+    string? FallbackCode = null,
+    bool? IsRtl = null);
+
+/// <summary>Body for <c>POST /api/languages/bulk</c>.</summary>
+public sealed record BulkCreateLanguagesRequest(IReadOnlyList<BulkCreateLanguageItem> Languages);
+
+/// <summary>
+/// Result of a bulk language create: the codes that were newly registered and the codes that
+/// already existed and were skipped (the call is idempotent).
+/// </summary>
+public sealed record BulkCreateLanguagesResult(
+    IReadOnlyList<string> Created,
+    IReadOnlyList<string> Skipped);

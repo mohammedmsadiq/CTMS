@@ -97,17 +97,23 @@ public sealed class PublishedTranslationsService
             return new PublishedTranslationsView(app.Slug, language.Code, cached.Translations, cached.Hash);
         }
 
-        var map = await AssembleAsync(app, language.Code, languagesByCode, cancellationToken);
+        var map = await AssembleAsync(app, language.Code, languagesByCode, includeApproved: false, cancellationToken);
         var hash = TranslationContentHash.Compute(map);
 
         await _cache.SetAsync(app.Slug, language.Code, new CachedTranslations(map, hash), cancellationToken);
         return new PublishedTranslationsView(app.Slug, language.Code, map, hash);
     }
 
+    /// <param name="includeApproved">
+    /// When <c>true</c> the assembly treats <see cref="ReviewState.Approved"/> strings as if they
+    /// were already <see cref="ReviewState.Published"/> — the "what publish would deliver" view used
+    /// by the publish preview.
+    /// </param>
     private async Task<IReadOnlyDictionary<string, string>> AssembleAsync(
         Project app,
         string languageCode,
         IReadOnlyDictionary<string, Language> languagesByCode,
+        bool includeApproved,
         CancellationToken cancellationToken)
     {
         var appKeys = (await _keys.ListByProjectsAsync([app.Id], cancellationToken))
@@ -128,7 +134,11 @@ public sealed class PublishedTranslationsService
                 .ToList();
 
         var allKeyIds = appKeys.Select(k => k.Id).Concat(sharedKeys.Select(k => k.Id)).ToList();
-        var publishedByKey = (await _strings.ListPublishedByKeyIdsAsync(allKeyIds, cancellationToken))
+        var candidateStrings = includeApproved
+            ? (await _strings.ListByKeyIdsAsync(allKeyIds, cancellationToken))
+                .Where(s => s.ReviewState is ReviewState.Published or ReviewState.Approved)
+            : await _strings.ListPublishedByKeyIdsAsync(allKeyIds, cancellationToken);
+        var publishedByKey = candidateStrings
             .GroupBy(s => s.TranslationKeyId)
             .ToDictionary(
                 g => g.Key,
@@ -187,6 +197,12 @@ public sealed class PublishedTranslationsService
 
     // ---- Management: grid ------------------------------------------------------------------
 
+    /// <param name="status">
+    /// Optional review-state filter (one of the four <see cref="ReviewState"/> names; an invalid
+    /// value is a <see cref="ValidationException"/>). When set, a row is included only if it has at
+    /// least one cell in that state — but the row still carries <em>all</em> its cells so the grid
+    /// stays coherent.
+    /// </param>
     public async Task<PagedResult<TranslationRowDto>?> GetGridAsync(
         string? applicationCode,
         string? category,
@@ -194,8 +210,11 @@ public sealed class PublishedTranslationsService
         string? search,
         int skip,
         int take,
+        string? status = null,
         CancellationToken cancellationToken = default)
     {
+        var statusFilter = ParseGridStatus(status);
+
         var scope = await ResolveScopeAsync(applicationCode, cancellationToken);
         if (scope is null)
         {
@@ -216,13 +235,17 @@ public sealed class PublishedTranslationsService
 
         var columns = ResolveColumns(scope, languageCode);
 
+        // For a single (non-shared) application the grid merges in every shared application's keys,
+        // tagging each row's cells with their provenance. Elsewhere every key is its own app's.
+        var tagged = await BuildTaggedKeysAsync(scope, cancellationToken);
+
         var normalizedCategory = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
-        var keys = scope.Keys
-            .Where(k => normalizedCategory is null
-                || string.Equals(k.Category, normalizedCategory, StringComparison.OrdinalIgnoreCase))
+        var keys = tagged
+            .Where(t => normalizedCategory is null
+                || string.Equals(t.Key.Category, normalizedCategory, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var stringsByKey = (await _strings.ListByKeyIdsAsync(keys.Select(k => k.Id).ToList(), cancellationToken))
+        var stringsByKey = (await _strings.ListByKeyIdsAsync(keys.Select(t => t.Key.Id).ToList(), cancellationToken))
             .GroupBy(s => s.TranslationKeyId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
@@ -230,21 +253,29 @@ public sealed class PublishedTranslationsService
         if (term is not null)
         {
             keys = keys
-                .Where(k => k.KeyName.Contains(term, StringComparison.OrdinalIgnoreCase)
-                    || (stringsByKey.TryGetValue(k.Id, out var ss)
+                .Where(t => t.Key.KeyName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || (stringsByKey.TryGetValue(t.Key.Id, out var ss)
                         && ss.Any(s => s.Value.Contains(term, StringComparison.OrdinalIgnoreCase))))
                 .ToList();
         }
 
-        keys.Sort((a, b) => string.CompareOrdinal(a.KeyName, b.KeyName));
+        if (statusFilter is { } wantedState)
+        {
+            keys = keys
+                .Where(t => stringsByKey.TryGetValue(t.Key.Id, out var ss)
+                    && ss.Any(s => s.ReviewState == wantedState))
+                .ToList();
+        }
+
+        keys.Sort((a, b) => string.CompareOrdinal(a.Key.KeyName, b.Key.KeyName));
 
         var total = keys.Count;
         var rows = keys
             .Skip(skip)
             .Take(take)
-            .Select(k =>
+            .Select(t =>
             {
-                var byLang = stringsByKey.TryGetValue(k.Id, out var ss)
+                var byLang = stringsByKey.TryGetValue(t.Key.Id, out var ss)
                     ? ss.ToDictionary(s => s.LanguageCode, StringComparer.OrdinalIgnoreCase)
                     : new Dictionary<string, TranslationString>(StringComparer.OrdinalIgnoreCase);
 
@@ -253,15 +284,133 @@ public sealed class PublishedTranslationsService
                 {
                     if (byLang.TryGetValue(column, out var s))
                     {
-                        values[column] = new TranslationValueDto(s.Value, s.ReviewState.ToString());
+                        values[column] = new TranslationValueDto(s.Value, s.ReviewState.ToString(), t.Source);
                     }
                 }
 
-                return new TranslationRowDto(k.Id, k.KeyName, k.Category, k.Description, values);
+                return new TranslationRowDto(t.Key.Id, t.Key.KeyName, t.Key.Category, t.Key.Description, values);
             })
             .ToList();
 
         return new PagedResult<TranslationRowDto>(rows, total);
+    }
+
+    private async Task<IReadOnlyList<(Domain.Translations.TranslationKey Key, string Source)>> BuildTaggedKeysAsync(
+        Scope scope,
+        CancellationToken cancellationToken)
+    {
+        if (scope.SingleApplication is not { IsShared: false } app)
+        {
+            return scope.Keys.Select(k => (k, "app")).ToList();
+        }
+
+        var ownedNames = scope.Keys.Select(k => k.KeyName).ToHashSet(StringComparer.Ordinal);
+        var tagged = scope.Keys.Select(k => (Key: k, Source: "app")).ToList();
+
+        var sharedProjects = (await _projects.ListSharedAsync(cancellationToken))
+            .Where(p => p.Id != app.Id)
+            .ToList();
+        if (sharedProjects.Count == 0)
+        {
+            return tagged;
+        }
+
+        var slugById = sharedProjects.ToDictionary(p => p.Id, p => p.Slug);
+        var sharedKeys = (await _keys.ListByProjectsAsync(sharedProjects.Select(p => p.Id).ToList(), cancellationToken))
+            .Where(k => k.Active && !ownedNames.Contains(k.KeyName));
+
+        foreach (var key in sharedKeys)
+        {
+            tagged.Add((key, $"shared:{slugById[key.ProjectId]}"));
+        }
+
+        return tagged;
+    }
+
+    private static ReviewState? ParseGridStatus(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return null;
+        }
+
+        var candidate = status.Trim();
+        if (!int.TryParse(candidate, out _)
+            && Enum.TryParse<ReviewState>(candidate, ignoreCase: false, out var parsed)
+            && Enum.IsDefined(parsed))
+        {
+            return parsed;
+        }
+
+        throw new ValidationException(
+            $"'{status}' is not a valid review state. Expected one of: {string.Join(", ", Enum.GetNames<ReviewState>())}.");
+    }
+
+    // ---- Management: publish preview -----------------------------------------------------
+
+    /// <summary>
+    /// The diff a <c>POST /api/translations/publish</c> for the same <c>(application, language)</c>
+    /// would make to the delivered map: the application's <see cref="ReviewState.Approved"/> strings
+    /// are treated as if already published and the result is compared with what is delivered today.
+    /// <paramref name="languageCode"/> is <b>required</b>. Returns <c>null</c> (→ 404) for an unknown
+    /// or inactive application/language, or a language not enabled for the application.
+    /// </summary>
+    public async Task<PublishPreviewResponse?> GetPublishPreviewAsync(
+        string? applicationCode,
+        string? languageCode,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(applicationCode))
+        {
+            throw new ValidationException("An application is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(languageCode))
+        {
+            throw new ValidationException("A language is required.");
+        }
+
+        var app = await _projects.GetBySlugAsync(Slug.From(applicationCode), cancellationToken);
+        if (app is null || !app.Active)
+        {
+            return null;
+        }
+
+        var languagesByCode = (await _languages.ListAllAsync(cancellationToken))
+            .ToDictionary(l => l.Code, StringComparer.OrdinalIgnoreCase);
+
+        if (!languagesByCode.TryGetValue(languageCode.Trim(), out var language) || !language.Active)
+        {
+            return null;
+        }
+
+        if (!app.EnabledLanguageCodes.Any(c => string.Equals(c, language.Code, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        var current = await AssembleAsync(app, language.Code, languagesByCode, includeApproved: false, cancellationToken);
+        var hypothetical = await AssembleAsync(app, language.Code, languagesByCode, includeApproved: true, cancellationToken);
+
+        var changes = new List<PublishPreviewChange>();
+        foreach (var (key, newValue) in hypothetical.OrderBy(e => e.Key, StringComparer.Ordinal))
+        {
+            if (!current.TryGetValue(key, out var currentValue))
+            {
+                changes.Add(new PublishPreviewChange(key, null, newValue, "added"));
+            }
+            else if (!string.Equals(currentValue, newValue, StringComparison.Ordinal))
+            {
+                changes.Add(new PublishPreviewChange(key, currentValue, newValue, "changed"));
+            }
+        }
+
+        return new PublishPreviewResponse(
+            app.Slug,
+            language.Code,
+            changes,
+            changes.Count(c => c.Kind == "added"),
+            changes.Count(c => c.Kind == "changed"));
     }
 
     // ---- Management: categories ----------------------------------------------------------

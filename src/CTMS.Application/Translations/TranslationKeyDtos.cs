@@ -12,10 +12,13 @@ public sealed record TranslationKeyDto(
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-/// <summary>Payload for creating a translation key.</summary>
+/// <summary>
+/// Payload for creating a translation key. <see cref="Category"/> is optional: when it is null
+/// or blank the service derives one from the key-name prefix (see <see cref="CategorySuggestion"/>).
+/// </summary>
 public sealed record CreateTranslationKeyRequest(
     string KeyName,
-    string Category,
+    string? Category = null,
     string? Description = null,
     string? CreatedBy = null);
 

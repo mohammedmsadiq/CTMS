@@ -61,6 +61,17 @@ public sealed class AuditTests : IDisposable
         => Assert.Null(await _harness.AuditService.ListByApplicationAsync("nope", 0, 50));
 
     [Fact]
+    public async Task AuditEntryDto_exposes_the_owning_application_id_as_applicationId()
+    {
+        await _harness.Audit.AppendAsync(
+            new AuditEntry(_projectId, "TranslationString", Guid.NewGuid(), AuditAction.Created, "a"));
+
+        var page = await _harness.AuditService.ListByApplicationAsync("acme-web", 0, 50);
+
+        Assert.Equal(_projectId, page!.Items[0].ApplicationId);
+    }
+
+    [Fact]
     public async Task Upsert_and_review_write_an_audit_trail_with_value_diffs()
     {
         var created = await _harness.TranslationStringService.UpsertAsync(

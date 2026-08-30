@@ -21,3 +21,19 @@ public sealed record UpsertTranslationStringResult(TranslationStringDto String, 
 
 /// <summary>Payload for a review-workflow transition.</summary>
 public sealed record ReviewRequest(string Action, string ReviewedBy);
+
+/// <summary>
+/// Body for <c>POST /api/applications/{application}/review-bulk</c>. The <see cref="Action"/> is
+/// applied to every string of the application that matches the optional <see cref="Language"/> /
+/// <see cref="Category"/> / <see cref="KeyIds"/> filters and is in a state the action is legal
+/// from; illegal ones are skipped, not errored. At least one filter is required.
+/// </summary>
+public sealed record ReviewBulkRequest(
+    string Action,
+    string? Language = null,
+    string? Category = null,
+    IReadOnlyList<Guid>? KeyIds = null,
+    string? ReviewedBy = null);
+
+/// <summary>Result of a bulk review: how many strings transitioned and how many were skipped.</summary>
+public sealed record ReviewBulkResult(int Transitioned, int Skipped);

@@ -61,8 +61,11 @@ app.WarnIfAuthDisabled();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
-// Reject oversized bodies with 413 before anything reads them.
-app.UseCtmsRequestBodySizeLimit(app.Configuration.MaxRequestBodyBytes());
+// Reject oversized bodies with 413 before anything reads them. The bulk-import endpoint opts in
+// to a larger ceiling (Limits:MaxImportBodyBytes) through endpoint metadata.
+app.UseCtmsRequestBodySizeLimit(
+    app.Configuration.MaxRequestBodyBytes(),
+    app.Configuration.MaxImportBodyBytes());
 
 // One structured line per request (method, path, status, elapsed); /health* excluded.
 app.UseCtmsHttpLogging();
@@ -110,6 +113,8 @@ app.MapLanguageEndpoints();
 app.MapTranslationKeyEndpoints();
 app.MapTranslationStringEndpoints();
 app.MapReviewEndpoints();
+app.MapBulkReviewEndpoints();
+app.MapTranslationImportEndpoints();
 app.MapTranslationEndpoints();
 app.MapAuditEndpoints();
 

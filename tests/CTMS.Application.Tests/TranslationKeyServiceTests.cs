@@ -33,10 +33,25 @@ public sealed class TranslationKeyServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateAsync_rejects_a_blank_category()
+    public async Task CreateAsync_derives_the_category_from_the_key_name_prefix_when_blank()
     {
+        var fromPrefix = await Service.CreateAsync(
+            "acme-web", new CreateTranslationKeyRequest("course.start", Category: "  "), "alice");
+        Assert.Equal("Course", fromPrefix.Category);
+
+        var noDot = await Service.CreateAsync(
+            "acme-web", new CreateTranslationKeyRequest("standalone", Category: null), "alice");
+        Assert.Equal("General", noDot.Category);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_still_rejects_an_explicitly_blank_category()
+    {
+        var created = await Service.CreateAsync(
+            "acme-web", new CreateTranslationKeyRequest("home.title", "Common"), "alice");
+
         await Assert.ThrowsAsync<ValidationException>(
-            () => Service.CreateAsync("acme-web", new CreateTranslationKeyRequest("home.title", "  "), "alice"));
+            () => Service.UpdateAsync("acme-web", created.Id, new UpdateTranslationKeyRequest(Category: "   ")));
     }
 
     [Fact]

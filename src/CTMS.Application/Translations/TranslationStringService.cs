@@ -260,6 +260,110 @@ public sealed class TranslationStringService
         return ToDto(translationString);
     }
 
+    /// <summary>
+    /// Applies <paramref name="request"/>.<c>Action</c> to every string of the application that
+    /// matches the optional language / category / key-id filters and is in a state the action is
+    /// legal from. Illegal transitions are skipped, not errored. Requires at least one filter.
+    /// </summary>
+    public async Task<ReviewBulkResult> ReviewBulkAsync(
+        string applicationCode,
+        ReviewBulkRequest request,
+        string reviewedBy,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(reviewedBy))
+        {
+            throw new ValidationException("A reviewer is required.");
+        }
+
+        var normalizedCategory = string.IsNullOrWhiteSpace(request.Category) ? null : request.Category.Trim();
+        var keyIdFilter = request.KeyIds is { Count: > 0 } ? request.KeyIds.ToHashSet() : null;
+        var languageFilterRaw = string.IsNullOrWhiteSpace(request.Language) ? null : NormalizeCode(request.Language);
+
+        if (normalizedCategory is null && keyIdFilter is null && languageFilterRaw is null)
+        {
+            throw new ValidationException(
+                "A bulk review needs at least one filter: 'language', 'category' or 'keyIds'.");
+        }
+
+        var (target, auditAction) = ResolveReviewAction(request.Action);
+
+        var project = await ResolveApplicationAsync(applicationCode, cancellationToken)
+            ?? throw new NotFoundException($"Application '{applicationCode}' was not found.");
+
+        string? languageFilter = null;
+        if (languageFilterRaw is not null)
+        {
+            var language = await _languages.GetByCodeAsync(languageFilterRaw, cancellationToken)
+                ?? throw new NotFoundException($"Language '{languageFilterRaw}' is not registered.");
+            languageFilter = language.Code;
+        }
+
+        var by = reviewedBy.Trim();
+
+        var keyIds = (await _keys.ListByProjectsAsync([project.Id], cancellationToken))
+            .Where(k => normalizedCategory is null
+                || string.Equals(k.Category, normalizedCategory, StringComparison.OrdinalIgnoreCase))
+            .Where(k => keyIdFilter is null || keyIdFilter.Contains(k.Id))
+            .Select(k => k.Id)
+            .ToList();
+
+        var strings = (await _strings.ListByKeyIdsAsync(keyIds, cancellationToken))
+            .Where(s => languageFilter is null
+                || string.Equals(s.LanguageCode, languageFilter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var transitioned = 0;
+        var skipped = 0;
+        var affectedLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var translationString in strings)
+        {
+            var fromState = translationString.ReviewState;
+            try
+            {
+                translationString.ChangeReviewState(target, by);
+            }
+            catch (InvalidReviewTransitionException)
+            {
+                skipped++;
+                continue;
+            }
+
+            await _strings.UpdateAsync(translationString, cancellationToken);
+            await _audit.AppendAsync(
+                new AuditEntry(
+                    project.Id,
+                    AuditEntityType,
+                    translationString.Id,
+                    auditAction,
+                    by,
+                    fromState,
+                    translationString.ReviewState),
+                cancellationToken);
+            transitioned++;
+
+            if (fromState == ReviewState.Published || translationString.ReviewState == ReviewState.Published)
+            {
+                affectedLanguages.Add(translationString.LanguageCode);
+            }
+        }
+
+        if (transitioned > 0)
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        if (affectedLanguages.Count > 0)
+        {
+            await _invalidator.InvalidateAsync(project, affectedLanguages.ToList(), cancellationToken);
+        }
+
+        return new ReviewBulkResult(transitioned, skipped);
+    }
+
     private async Task<string> RequireEnabledLanguageAsync(
         Project project,
         string languageCode,
