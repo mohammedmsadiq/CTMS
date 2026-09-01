@@ -51,9 +51,9 @@ public sealed class TranslationServiceRegistrationTests
 
         var translations = sp.GetRequiredService<ITranslationService>();
 
-        var bundle = await translations.GetTranslationsAsync("icoach", "fr-FR");
+        var bundle = await translations.GetTranslationsAsync("nimbus", "fr-FR");
 
-        Assert.Equal("icoach", bundle.Project);
+        Assert.Equal("nimbus", bundle.Project);
         Assert.Equal("fr-FR", bundle.Language);
 
         // Common value merged in, project value present, fallback fills fr-FR from en-GB,
@@ -67,7 +67,7 @@ public sealed class TranslationServiceRegistrationTests
         Assert.False(string.IsNullOrWhiteSpace(bundle.ETag));
 
         // The ETag is stable across calls when nothing changed.
-        var again = await translations.GetTranslationsAsync("icoach", "fr-FR");
+        var again = await translations.GetTranslationsAsync("nimbus", "fr-FR");
         Assert.Equal(bundle.ETag, again.ETag);
 
         await new MongoClient(_fixture.ConnectionString).DropDatabaseAsync(databaseName);
@@ -87,19 +87,19 @@ public sealed class TranslationServiceRegistrationTests
         common.SetEnabledLanguages(["en-GB", "fr-FR"]);
         await projects.AddAsync(common);
 
-        var icoach = new Project("iCoach", "icoach", "en-GB");
-        icoach.SetEnabledLanguages(["en-GB", "fr-FR"]);
-        await projects.AddAsync(icoach);
+        var nimbus = new Project("Nimbus", "nimbus", "en-GB");
+        nimbus.SetEnabledLanguages(["en-GB", "fr-FR"]);
+        await projects.AddAsync(nimbus);
 
         await PublishAsync(keys, strings, common.Id, "common.save", "fr-FR", "Enregistrer");
-        await PublishAsync(keys, strings, icoach.Id, "course.start", "fr-FR", "Commencer");
-        await PublishAsync(keys, strings, icoach.Id, "course.resume", "en-GB", "Resume");
+        await PublishAsync(keys, strings, nimbus.Id, "course.start", "fr-FR", "Commencer");
+        await PublishAsync(keys, strings, nimbus.Id, "course.resume", "en-GB", "Resume");
 
-        var draftKey = new TranslationKey(icoach.Id, "course.draft", "Course", "seed");
+        var draftKey = new TranslationKey(nimbus.Id, "course.draft", "Course", "seed");
         await keys.AddAsync(draftKey);
         await strings.AddAsync(new TranslationString(draftKey.Id, "fr-FR", "brouillon", "seed"));
 
-        var retiredKey = new TranslationKey(icoach.Id, "course.retired", "Course", "seed");
+        var retiredKey = new TranslationKey(nimbus.Id, "course.retired", "Course", "seed");
         await keys.AddAsync(retiredKey);
         var retired = new TranslationString(retiredKey.Id, "fr-FR", "retiré", "seed");
         retired.ChangeReviewState(ReviewState.Archived, "seed");

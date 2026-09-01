@@ -106,13 +106,13 @@ public sealed class CtmsClientRevalidationTests
     public async Task An_api_problem_response_throws_CtmsApiException_with_status_title_and_detail()
     {
         var handler = new StubHttpMessageHandler()
-            .Enqueue(_ => StubHttpMessageHandler.Problem(HttpStatusCode.NotFound, "Resource not found", "Unknown application 'icoach'"));
+            .Enqueue(_ => StubHttpMessageHandler.Problem(HttpStatusCode.NotFound, "Resource not found", "Unknown application 'nimbus'"));
         var client = TestClient.Create(handler, out _);
 
         var ex = await Assert.ThrowsAsync<CtmsApiException>(() => client.GetTranslationsAsync("fr-FR"));
         Assert.Equal(404, ex.StatusCode);
         Assert.Equal("Resource not found", ex.Title);
-        Assert.Equal("Unknown application 'icoach'", ex.Detail);
+        Assert.Equal("Unknown application 'nimbus'", ex.Detail);
     }
 
     [Fact]

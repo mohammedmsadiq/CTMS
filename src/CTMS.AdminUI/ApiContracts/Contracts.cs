@@ -153,7 +153,17 @@ public sealed record TranslationRowDto(
     string Key,
     string Category,
     string? Description,
-    IReadOnlyDictionary<string, TranslationValueDto> Values);
+    IReadOnlyDictionary<string, TranslationValueDto> Values,
+    string? Source = null)
+{
+    /// <summary>The Common project code when this key is merged in from a common project, else <c>null</c>.</summary>
+    public string? BorrowedFrom =>
+        Source is { } s && s.StartsWith("shared:", StringComparison.Ordinal) ? s["shared:".Length..] : null;
+
+    /// <summary>The key belongs to a common project, not the one in view — its metadata and values
+    /// are read-only here and managed on that project's grid.</summary>
+    public bool IsBorrowed => BorrowedFrom is not null;
+}
 
 // ---- Management: dashboard -----------------------------------------
 

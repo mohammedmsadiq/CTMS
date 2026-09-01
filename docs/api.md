@@ -8,7 +8,7 @@ cross-reference `src/CTMS.Application`.
 - Local dev base URL: `http://localhost:5147` (Swagger UI at `/swagger` in
   `Development`). In the container / compose it is `http://localhost:8080`.
 - The **project** in a route path is the project **code** (the `Project` slug,
-  e.g. `icoach`), not a GUID. The **language** is a BCP-47 code (e.g. `fr-FR`).
+  e.g. `nimbus`), not a GUID. The **language** is a BCP-47 code (e.g. `fr-FR`).
   Key ids are GUIDs (`{keyId:guid}` route constraint) — a non-GUID segment is a
   route miss (`404`), not a `400`.
 - The API has two surfaces: the **Consumer API** (one route, anonymous by
@@ -55,7 +55,7 @@ DTO: `PublishedTranslationsResponse`.
 
 ```json
 {
-  "project": "icoach",
+  "project": "nimbus",
   "language": "fr-FR",
   "translations": {
     "common.cancel": "Quitter le cours",

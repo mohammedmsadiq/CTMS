@@ -445,7 +445,7 @@ and call:
 ```csharp
 var translations =
     await _translationService.GetTranslationsAsync(
-        "icoach",
+        "nimbus",
         "fr-FR",
         cancellationToken);
 ```
@@ -561,7 +561,7 @@ GET /api/translations/{project}/{language}
 Example:
 
 ```http
-GET /api/translations/icoach/fr-FR
+GET /api/translations/nimbus/fr-FR
 ```
 
 The API controller should:
@@ -610,7 +610,7 @@ Example:
 
 ```json
 {
-  "project": "icoach",
+  "project": "nimbus",
   "language": "fr-FR",
   "translations": {
     "common.save": "Enregistrer",
@@ -673,7 +673,7 @@ Each project/application may have project-specific translations.
 Examples:
 
 ```text
-icoach
+nimbus
 website
 customerportal
 adminportal
@@ -682,7 +682,7 @@ adminportal
 Example:
 
 ```text
-icoach:
+nimbus:
     course.start
     course.complete
     course.progress
@@ -703,7 +703,7 @@ customerportal:
 For:
 
 ```text
-project = icoach
+project = nimbus
 language = fr-FR
 ```
 
@@ -712,7 +712,7 @@ resolve:
 ```text
 Common/fr-FR
 +
-iCoach/fr-FR
+Nimbus/fr-FR
 ```
 
 into:
@@ -910,7 +910,7 @@ Translation bundles must support ETags.
 Example:
 
 ```http
-GET /api/translations/icoach/fr-FR
+GET /api/translations/nimbus/fr-FR
 
 ETag: "abc123"
 ```
@@ -959,7 +959,7 @@ translations:{project}:{language}
 Example:
 
 ```text
-translations:icoach:fr-FR
+translations:nimbus:fr-FR
 ```
 
 The cached value should already contain:
@@ -981,7 +981,7 @@ Consumers should not perform this combination.
 When a Project translation changes:
 
 ```text
-translations:icoach:fr-FR
+translations:nimbus:fr-FR
 ```
 
 should be invalidated.
@@ -999,7 +999,7 @@ Common/fr-FR
 may affect:
 
 ```text
-icoach/fr-FR
+nimbus/fr-FR
 website/fr-FR
 customerportal/fr-FR
 adminportal/fr-FR

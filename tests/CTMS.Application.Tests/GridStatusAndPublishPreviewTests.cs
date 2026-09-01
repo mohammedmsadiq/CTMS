@@ -26,7 +26,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
     [Fact]
     public async Task Grid_status_filter_keeps_rows_with_at_least_one_matching_cell_but_returns_all_cells()
     {
-        var app = await AppAsync("icoach");
+        var app = await AppAsync("nimbus");
         var k1 = await Seed.KeyAsync(_harness, app, "a.one", "Course");
         var k2 = await Seed.KeyAsync(_harness, app, "b.two", "Course");
         await Seed.StringAsync(_harness, k1.Id, "en-GB", "One EN", ReviewState.Approved);
@@ -34,7 +34,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
         await Seed.StringAsync(_harness, k2.Id, "en-GB", "Two EN", ReviewState.Draft);
 
         var approved = await _harness.PublishedTranslationsService.GetGridAsync(
-            "icoach", null, null, null, 0, 50, "Approved");
+            "nimbus", null, null, null, 0, 50, "Approved");
 
         var row = Assert.Single(approved!.Items);
         Assert.Equal("a.one", row.Key);
@@ -46,7 +46,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
     [Fact]
     public async Task Grid_status_filter_rejects_an_invalid_value()
         => await Assert.ThrowsAsync<ValidationException>(() => _harness.PublishedTranslationsService.GetGridAsync(
-            "icoach", null, null, null, 0, 50, "Bogus"));
+            "nimbus", null, null, null, 0, 50, "Bogus"));
 
     [Fact]
     public async Task Grid_tags_the_source_of_each_cell_app_vs_shared()
@@ -55,11 +55,11 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
         var sharedKey = await Seed.KeyAsync(_harness, common, "common.save", "Common");
         await Seed.StringAsync(_harness, sharedKey.Id, "fr-FR", "Enregistrer", ReviewState.Published);
 
-        var app = await AppAsync("icoach");
+        var app = await AppAsync("nimbus");
         var ownKey = await Seed.KeyAsync(_harness, app, "course.start", "Course");
         await Seed.StringAsync(_harness, ownKey.Id, "fr-FR", "Commencer", ReviewState.Draft);
 
-        var grid = await _harness.PublishedTranslationsService.GetGridAsync("icoach", null, null, null, 0, 50);
+        var grid = await _harness.PublishedTranslationsService.GetGridAsync("nimbus", null, null, null, 0, 50);
 
         var own = grid!.Items.Single(r => r.Key == "course.start");
         Assert.Equal("app", own.Values["fr-FR"].Source);
@@ -71,7 +71,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
     [Fact]
     public async Task Publish_preview_classifies_added_and_changed_and_requires_a_language()
     {
-        var app = await AppAsync("icoach");
+        var app = await AppAsync("nimbus");
         var kAdded = await Seed.KeyAsync(_harness, app, "a.added", "Course");
         var kChanged = await Seed.KeyAsync(_harness, app, "b.changed", "Course");
         var kSame = await Seed.KeyAsync(_harness, app, "c.same", "Course");
@@ -88,7 +88,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
         await Seed.StringAsync(_harness, kSame.Id, "en-GB", "Same", ReviewState.Published);
         await Seed.StringAsync(_harness, kSame.Id, "fr-FR", "Same", ReviewState.Approved);
 
-        var preview = await _harness.PublishedTranslationsService.GetPublishPreviewAsync("icoach", "fr-FR");
+        var preview = await _harness.PublishedTranslationsService.GetPublishPreviewAsync("nimbus", "fr-FR");
 
         Assert.Equal(1, preview!.AddedCount);
         Assert.Equal(1, preview.ChangedCount);
@@ -97,7 +97,7 @@ public sealed class GridStatusAndPublishPreviewTests : IDisposable
         Assert.DoesNotContain(preview.Changes, c => c.Key == "c.same");
 
         await Assert.ThrowsAsync<ValidationException>(
-            () => _harness.PublishedTranslationsService.GetPublishPreviewAsync("icoach", null));
+            () => _harness.PublishedTranslationsService.GetPublishPreviewAsync("nimbus", null));
     }
 
     public void Dispose() => _harness.Dispose();

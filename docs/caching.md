@@ -28,7 +28,7 @@ translations:{projectCode}:{languageCode}
 ```
 
 Both segments trimmed and lower-cased (`PublishedTranslationsCache.KeyFor`).
-Example: `translations:icoach:fr-ca`.
+Example: `translations:nimbus:fr-ca`.
 
 ## Backend — Redis or in-process, identical behaviour
 

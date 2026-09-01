@@ -77,7 +77,7 @@ public sealed class ApplicationInfo
         UpdatedAt = updatedAt;
     }
 
-    /// <summary>Application code / slug, e.g. <c>icoach</c>.</summary>
+    /// <summary>Application code / slug, e.g. <c>nimbus</c>.</summary>
     public string Code { get; }
 
     /// <summary>Human-readable name.</summary>

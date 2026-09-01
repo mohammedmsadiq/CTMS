@@ -59,20 +59,20 @@ never part of the assembled result.
 - `*` — matches whenever a map exists.
 
 ```
-GET /api/translations/icoach/fr-FR
+GET /api/translations/nimbus/fr-FR
 → 200 OK
   ETag: "9f2b…c1"
   Cache-Control: no-cache
-  { "project": "icoach", "language": "fr-FR", "translations": { … } }
+  { "project": "nimbus", "language": "fr-FR", "translations": { … } }
 
-GET /api/translations/icoach/fr-FR
+GET /api/translations/nimbus/fr-FR
 If-None-Match: "9f2b…c1"
 → 304 Not Modified
   ETag: "9f2b…c1"
   (no body)
 
 # after a publish changes a value:
-GET /api/translations/icoach/fr-FR
+GET /api/translations/nimbus/fr-FR
 If-None-Match: "9f2b…c1"
 → 200 OK
   ETag: "4d7a…e0"

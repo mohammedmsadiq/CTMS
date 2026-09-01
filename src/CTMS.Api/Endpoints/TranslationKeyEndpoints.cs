@@ -64,9 +64,11 @@ internal static class TranslationKeyEndpoints
                 Guid keyId,
                 UpdateTranslationKeyRequest request,
                 TranslationKeyService keys,
+                HttpContext http,
                 CancellationToken cancellationToken) =>
             {
-                var updated = await keys.UpdateAsync(project, keyId, request, cancellationToken);
+                var actor = TokenActor.Resolve(http.User, null, "system");
+                var updated = await keys.UpdateAsync(project, keyId, request, actor, cancellationToken);
                 return updated is null ? Results.NotFound() : Results.Ok(updated);
             })
             .WithName("UpdateTranslationKey")
@@ -79,9 +81,11 @@ internal static class TranslationKeyEndpoints
                 string project,
                 Guid keyId,
                 TranslationKeyService keys,
+                HttpContext http,
                 CancellationToken cancellationToken) =>
             {
-                var deleted = await keys.DeleteAsync(project, keyId, cancellationToken);
+                var actor = TokenActor.Resolve(http.User, null, "system");
+                var deleted = await keys.DeleteAsync(project, keyId, actor, cancellationToken);
                 return deleted is true ? Results.NoContent() : Results.NotFound();
             })
             .WithName("DeleteTranslationKey")

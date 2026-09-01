@@ -1,5 +1,7 @@
+using CTMS.Application.Audit;
 using CTMS.Application.Common;
 using CTMS.Application.Projects;
+using CTMS.Domain.Audit;
 using CTMS.Domain.Projects;
 using CTMS.Domain.Translations;
 
@@ -9,20 +11,30 @@ namespace CTMS.Application.Translations;
 public sealed class TranslationKeyService
 {
     private const string SystemActor = "system";
+    private const string AuditEntityType = "TranslationKey";
     private const int DefaultPageSize = 50;
     private const int MaxPageSize = 200;
 
     private readonly ITranslationKeyRepository _keys;
+    private readonly ITranslationStringRepository _strings;
     private readonly IProjectRepository _projects;
+    private readonly IAuditRepository _audit;
+    private readonly TranslationCacheInvalidator _invalidator;
     private readonly IUnitOfWork _unitOfWork;
 
     public TranslationKeyService(
         ITranslationKeyRepository keys,
+        ITranslationStringRepository strings,
         IProjectRepository projects,
+        IAuditRepository audit,
+        TranslationCacheInvalidator invalidator,
         IUnitOfWork unitOfWork)
     {
         _keys = keys;
+        _strings = strings;
         _projects = projects;
+        _audit = audit;
+        _invalidator = invalidator;
         _unitOfWork = unitOfWork;
     }
 
@@ -118,6 +130,7 @@ public sealed class TranslationKeyService
         string applicationCode,
         Guid keyId,
         UpdateTranslationKeyRequest request,
+        string? actor = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -149,13 +162,32 @@ public sealed class TranslationKeyService
             key.Describe(request.Description.Length == 0 ? null : request.Description);
         }
 
+        var activeChanged = false;
         if (request.Active is { } active)
         {
+            activeChanged = key.Active != active;
             key.SetActive(active);
         }
 
         await _keys.UpdateAsync(key, cancellationToken);
+
+        if (activeChanged)
+        {
+            // Activating/deactivating a key adds it to / removes it from delivery — record it and
+            // drop the delivery cache for the languages that had published values under this key.
+            await _audit.AppendAsync(
+                new AuditEntry(
+                    project.Id, AuditEntityType, key.Id, AuditAction.Edited, Actor(actor),
+                    detail: $"key {key.KeyName} {(key.Active ? "activated" : "deactivated")}"),
+                cancellationToken);
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (activeChanged)
+        {
+            await InvalidatePublishedLanguagesAsync(project, key.Id, cancellationToken);
+        }
 
         return ToDto(key, project.Slug);
     }
@@ -163,6 +195,7 @@ public sealed class TranslationKeyService
     public async Task<bool?> DeleteAsync(
         string applicationCode,
         Guid keyId,
+        string? actor = null,
         CancellationToken cancellationToken = default)
     {
         var project = await ResolveApplicationAsync(applicationCode, cancellationToken);
@@ -177,10 +210,40 @@ public sealed class TranslationKeyService
             return false;
         }
 
+        // Which languages currently carry a published value under this key — those bundles go stale.
+        var publishedLanguages = (await _strings.ListByKeyAsync(key.Id, cancellationToken))
+            .Where(s => s.ReviewState == ReviewState.Published)
+            .Select(s => s.LanguageCode)
+            .ToList();
+
         await _keys.RemoveAsync(key, cancellationToken);
+        await _audit.AppendAsync(
+            new AuditEntry(
+                project.Id, AuditEntityType, key.Id, AuditAction.Deleted, Actor(actor),
+                detail: $"key {key.KeyName} deleted"),
+            cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        if (publishedLanguages.Count > 0)
+        {
+            await _invalidator.InvalidateAsync(project, publishedLanguages, cancellationToken);
+        }
+
         return true;
+    }
+
+    private async Task InvalidatePublishedLanguagesAsync(
+        Project project, Guid keyId, CancellationToken cancellationToken)
+    {
+        var languages = (await _strings.ListByKeyAsync(keyId, cancellationToken))
+            .Where(s => s.ReviewState == ReviewState.Published)
+            .Select(s => s.LanguageCode)
+            .ToList();
+
+        if (languages.Count > 0)
+        {
+            await _invalidator.InvalidateAsync(project, languages, cancellationToken);
+        }
     }
 
     private Task<Project?> ResolveApplicationAsync(string applicationCode, CancellationToken cancellationToken)

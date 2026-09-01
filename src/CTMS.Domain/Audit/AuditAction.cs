@@ -12,4 +12,5 @@ public enum AuditAction
     Published = 6,
     Archived = 7,
     Unarchived = 8,
+    Deleted = 9,
 }
