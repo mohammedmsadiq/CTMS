@@ -1137,6 +1137,58 @@ Missing
 
 Support RTL languages such as Arabic.
 
+## Bulk import / export (translator work files)
+
+The grid is backed by a file round-trip so translators can work offline in a spreadsheet.
+
+### `GET /api/projects/{project}/export`
+
+Policy `CanRead`. `404` for an unknown or inactive project. Streams a file — the writers live
+in `CTMS.Application/Translations/Export` (`TranslationExporter` → `ExportedFile`) so they are
+unit-testable without HTTP; the endpoint only streams the bytes.
+
+Query parameters:
+
+| param                 | meaning                                                                                 |
+|-----------------------|----------------------------------------------------------------------------------------|
+| `format` (required)   | `csv` or `xlsx`; anything else is `400`                                                 |
+| `language`            | restrict output to this one language column; omitted ⇒ all of the project's enabled languages |
+| `category`            | only keys in this category                                                              |
+| `includeInactiveKeys` | default `false`                                                                         |
+| `status`              | only keys with ≥1 value in that review state (same semantics as the grid `status` filter) |
+
+Shape: one row per translation key the project **owns** (the merged `common` keys are exported
+from the `common` project itself). Columns are `key`, `category`, `description`, then one column
+per language code (header = the BCP-47 code). Each language cell is that key's current value in
+that language, any review state, blank when there is no string. Rows are ordered by key name.
+
+- **CSV** — `text/csv; charset=utf-8`, RFC-4180 quoting, `\r\n` line endings, a leading UTF-8 BOM;
+  `Content-Disposition: attachment; filename="{project}-translations.csv"`.
+- **XLSX** — one worksheet `Translations`, bold + frozen header row, frozen first column, columns
+  auto-sized; media type
+  `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
+  `filename="{project}-translations.xlsx"`.
+
+### `POST /api/projects/{project}/import`
+
+`TranslationFileParser` accepts `json | flat | csv | xlsx`.
+
+- `json` / `flat` are **narrow**: `language` is required and applies to every row.
+- `csv` / `xlsx` are shaped by the header row:
+  - **narrow** — a `key` column plus a `value` column: each row is `(key, value)` for the
+    request's `language` (required, as for `json` / `flat`). A narrow import with no `language`
+    is `400` "language is required for this format".
+  - **wide** — a `key` column plus one or more columns whose header is a registered language
+    code: each such column imports that language and the request's `language` is **ignored**.
+    Optional `category` / `description` columns seed a newly-created key; other columns are
+    ignored. A blank cell is a skip, never a delete.
+- CSV bodies go in `content`; XLSX bytes go **base64-encoded in `contentBase64`** (only `.xlsx`
+  OpenXML, not legacy `.xls`). Per-row failures use the existing `{ line?, key?, message }` model
+  (the 1-based row number for xlsx); `createdStrings` / `updatedStrings` count across all
+  languages. The 5 MB `Limits:MaxImportBodyBytes` cap applies.
+
+`ClosedXML` (MIT) does the XLSX read/write; it is referenced from `CTMS.Application`.
+
 ---
 
 # 35. Management API vs Consumer API

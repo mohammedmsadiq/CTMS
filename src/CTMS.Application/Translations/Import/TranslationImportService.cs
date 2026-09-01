@@ -8,10 +8,13 @@ using CTMS.Domain.Translations;
 namespace CTMS.Application.Translations.Import;
 
 /// <summary>
-/// Bulk-imports a translation file into one <c>(application, language)</c>: it parses the body
-/// (see <see cref="TranslationFileParser"/>), creates any missing <see cref="TranslationKey"/>,
-/// and upserts a <see cref="TranslationString"/> per parsed entry at the requested review state.
-/// A <c>dryRun</c> computes the same plan without writing anything.
+/// Bulk-imports a translation file into a project. It parses the body (see
+/// <see cref="TranslationFileParser"/>), creates any missing <see cref="TranslationKey"/>, and
+/// upserts a <see cref="TranslationString"/> per parsed entry at the requested review state.
+/// A narrow file (<c>json</c> / <c>flat</c> / a <c>csv</c>/<c>xlsx</c> with a <c>value</c> column)
+/// targets the request's <c>language</c>; a wide <c>csv</c>/<c>xlsx</c> (language-code columns)
+/// imports every one of its language columns and ignores the request's <c>language</c>. A
+/// <c>dryRun</c> computes the same plan without writing anything.
 /// </summary>
 public sealed class TranslationImportService
 {
@@ -55,13 +58,28 @@ public sealed class TranslationImportService
 
         var targetState = ParseImportStatus(request.Status);
 
-        // Parse first so a malformed body is a 400 before any store round-trip.
-        var entries = TranslationFileParser.Parse(request.Format, request.Content);
-
         var app = await _projects.GetBySlugAsync(Slug.From(applicationCode ?? string.Empty), cancellationToken)
             ?? throw new NotFoundException($"Application '{applicationCode}' was not found.");
 
-        var languageCode = await ResolveEnabledLanguageAsync(app, request.Language, cancellationToken);
+        // Canonical casing + membership test for language-code columns / the request language.
+        var registered = (await _languages.ListAllAsync(cancellationToken))
+            .ToDictionary(l => l.Code, l => l.Code, StringComparer.OrdinalIgnoreCase);
+
+        // Parse (a malformed body is a 400 before any further store round-trip).
+        var parsed = TranslationFileParser.Parse(
+            request.Format, request.Content, request.ContentBase64, registered.ContainsKey);
+
+        // Narrow formats need a single enabled language that applies to every row.
+        string? narrowLanguage = null;
+        if (!parsed.IsWide)
+        {
+            if (string.IsNullOrWhiteSpace(request.Language))
+            {
+                throw new ValidationException("language is required for this format");
+            }
+
+            narrowLanguage = await ResolveEnabledLanguageAsync(app, request.Language, cancellationToken);
+        }
 
         var by = string.IsNullOrWhiteSpace(actor) ? SystemActor : actor.Trim();
         var requestedCategory = string.IsNullOrWhiteSpace(request.Category) ? null : request.Category.Trim();
@@ -70,10 +88,8 @@ public sealed class TranslationImportService
             .ToDictionary(k => k.KeyName, k => k, StringComparer.Ordinal);
 
         var originalKeyIds = keysByName.Values.Select(k => k.Id).ToList();
-        var stringByKeyId = (await _strings.ListByKeyIdsAsync(originalKeyIds, cancellationToken))
-            .Where(s => string.Equals(s.LanguageCode, languageCode, StringComparison.OrdinalIgnoreCase))
-            .GroupBy(s => s.TranslationKeyId)
-            .ToDictionary(g => g.Key, g => g.First());
+        var stringByKeyLang = (await _strings.ListByKeyIdsAsync(originalKeyIds, cancellationToken))
+            .ToDictionary(s => (s.TranslationKeyId, s.LanguageCode.ToLowerInvariant()), s => s);
 
         var newKeys = new List<TranslationKey>();
         var newStrings = new List<TranslationString>();
@@ -81,6 +97,7 @@ public sealed class TranslationImportService
         var auditEntries = new List<AuditEntry>();
         var errors = new List<ImportError>();
         var keyNames = new List<string>();
+        var touchedLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var createdKeys = 0;
         var createdStrings = 0;
@@ -88,39 +105,43 @@ public sealed class TranslationImportService
         var skipped = 0;
         var publishedTouched = false;
 
-        foreach (var entry in entries)
+        foreach (var entry in parsed.Entries)
         {
             var keyName = entry.Key.Trim();
             if (keyName.Length == 0 || !IsValidKeyName(keyName))
             {
                 errors.Add(new ImportError(
-                    null,
+                    entry.Line,
                     entry.Key,
                     "invalid key name; allowed characters are letters, digits, '.', '-' and '_'."));
                 continue;
             }
 
+            var languageCode = entry.LanguageCode is { } raw
+                ? registered.GetValueOrDefault(raw, raw.Trim())
+                : narrowLanguage!;
+
             keyNames.Add(keyName);
 
-            var keyIsNew = false;
             if (!keysByName.TryGetValue(keyName, out var key))
             {
-                var category = requestedCategory ?? CategorySuggestion.FromKeyName(keyName);
-                key = new TranslationKey(app.Id, keyName, category, by);
+                var category = entry.Category ?? requestedCategory ?? CategorySuggestion.FromKeyName(keyName);
+                key = new TranslationKey(app.Id, keyName, category, by, entry.Description);
                 keysByName[keyName] = key;
                 newKeys.Add(key);
                 createdKeys++;
-                keyIsNew = true;
             }
 
-            var existing = keyIsNew ? null : stringByKeyId.GetValueOrDefault(key.Id);
+            var lookup = (key.Id, languageCode.ToLowerInvariant());
+            var existing = stringByKeyLang.GetValueOrDefault(lookup);
             if (existing is null)
             {
                 var created = new TranslationString(key.Id, languageCode, entry.Value, by);
                 DriveReviewState(created, targetState, by);
                 newStrings.Add(created);
-                stringByKeyId[key.Id] = created;
+                stringByKeyLang[lookup] = created;
                 createdStrings++;
+                touchedLanguages.Add(languageCode);
                 auditEntries.Add(new AuditEntry(
                     app.Id,
                     AuditEntityType,
@@ -151,6 +172,7 @@ public sealed class TranslationImportService
             DriveReviewState(existing, targetState, by);
             changedStrings.Add(existing);
             updatedStrings++;
+            touchedLanguages.Add(existing.LanguageCode);
 
             if (valueChanged)
             {
@@ -196,9 +218,9 @@ public sealed class TranslationImportService
 
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-            if (publishedTouched)
+            if (publishedTouched && touchedLanguages.Count > 0)
             {
-                await _invalidator.InvalidateAsync(app, [languageCode], cancellationToken);
+                await _invalidator.InvalidateAsync(app, touchedLanguages.ToList(), cancellationToken);
             }
         }
 

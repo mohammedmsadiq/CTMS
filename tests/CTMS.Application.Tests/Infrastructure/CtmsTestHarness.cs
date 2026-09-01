@@ -3,6 +3,7 @@ using CTMS.Application.Common;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
+using CTMS.Application.Translations.Export;
 using CTMS.Application.Translations.Import;
 using CTMS.Infrastructure.Persistence.Caching;
 using CTMS.Infrastructure.Persistence.Mongo;
@@ -58,6 +59,7 @@ public sealed class CtmsTestHarness : IDisposable
         TranslationService = new TranslationService(PublishedTranslationsService);
         TranslationImportService = new TranslationImportService(
             Projects, Languages, Keys, Strings, Audit, invalidator, UnitOfWork);
+        TranslationExportService = new TranslationExportService(Projects, Keys, Strings);
         AuditService = new AuditService(Audit, Projects);
     }
 
@@ -94,6 +96,8 @@ public sealed class CtmsTestHarness : IDisposable
     public ITranslationService TranslationService { get; }
 
     public TranslationImportService TranslationImportService { get; }
+
+    public TranslationExportService TranslationExportService { get; }
 
     public AuditService AuditService { get; }
 

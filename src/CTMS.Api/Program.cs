@@ -117,6 +117,7 @@ app.MapTranslationStringEndpoints();
 app.MapReviewEndpoints();
 app.MapBulkReviewEndpoints();
 app.MapTranslationImportEndpoints();
+app.MapTranslationExportEndpoints();
 app.MapTranslationEndpoints();
 app.MapAuditEndpoints();
 

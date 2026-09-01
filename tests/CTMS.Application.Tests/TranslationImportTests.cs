@@ -77,8 +77,8 @@ public sealed class TranslationImportTests : IDisposable
     [Fact]
     public async Task An_unknown_format_is_a_validation_error()
     {
-        var ex = await Assert.ThrowsAsync<ImportFormatException>(() => ImportAsync("csv", "key,value\na,b"));
-        Assert.Contains("json, flat", ex.Message);
+        var ex = await Assert.ThrowsAsync<ImportFormatException>(() => ImportAsync("bmp", "key,value\na,b"));
+        Assert.Contains("json, flat, csv, xlsx", ex.Message);
     }
 
     [Fact]

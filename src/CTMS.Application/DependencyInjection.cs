@@ -2,6 +2,7 @@ using CTMS.Application.Audit;
 using CTMS.Application.Languages;
 using CTMS.Application.Projects;
 using CTMS.Application.Translations;
+using CTMS.Application.Translations.Export;
 using CTMS.Application.Translations.Import;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,6 +21,7 @@ public static class DependencyInjection
         services.AddScoped<PublishedTranslationsService>();
         services.AddScoped<ITranslationService, TranslationService>();
         services.AddScoped<TranslationImportService>();
+        services.AddScoped<TranslationExportService>();
         services.AddScoped<AuditService>();
         return services;
     }

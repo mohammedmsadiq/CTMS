@@ -8,7 +8,8 @@ internal static class TranslationImportEndpoints
 {
     public static IEndpointRouteBuilder MapTranslationImportEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        // Bulk import a translation file into one (project, language). Admin/manager only.
+        // Bulk import a translation file (json/flat/csv/xlsx, narrow or wide) into a project.
+        // Admin/manager only.
         endpoints.MapPost("/api/projects/{project}/import", async (
                 string project,
                 ImportTranslationsRequest request,
