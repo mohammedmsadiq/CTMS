@@ -177,6 +177,46 @@ public sealed class CtmsApiClient(HttpClient http)
                 ("take", take.ToString())),
             ct);
 
+    /// <summary>
+    /// <c>GET /api/projects/{project}/export</c> — the translator work file, fetched server-side
+    /// through the wired <see cref="HttpClient"/> (base address <c>Ctms:ApiBaseUrl</c>, bearer
+    /// token attached by <c>CtmsApiTokenHandler</c>). <see cref="DownloadService"/> streams the
+    /// bytes on to the browser, so this works whether or not the Admin UI shares an origin with
+    /// the API. Pass <paramref name="language"/> only when the grid shows a single language
+    /// column; otherwise every enabled language is exported.
+    /// </summary>
+    public async Task<Result<ExportFile>> GetExportAsync(
+        string project, string format, string? language = null,
+        string? category = null, string? status = null, CancellationToken ct = default)
+    {
+        var uri = $"api/projects/{Esc(project)}/export" + Query(
+            ("format", format),
+            ("language", string.IsNullOrWhiteSpace(language) ? null : language),
+            ("category", string.IsNullOrWhiteSpace(category) ? null : category),
+            ("status", string.IsNullOrWhiteSpace(status) ? null : status));
+
+        try
+        {
+            using var response = await http.GetAsync(uri, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                return Result<ExportFile>.Failure(await ReadErrorAsync(response, ct));
+            }
+
+            var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+            var contentType = response.Content.Headers.ContentType?.ToString()
+                ?? "application/octet-stream";
+            var fileName = response.Content.Headers.ContentDisposition?.FileNameStar
+                ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+                ?? $"{project}-translations.{(string.Equals(format, "xlsx", StringComparison.Ordinal) ? "xlsx" : "csv")}";
+            return Result<ExportFile>.Success(new ExportFile(bytes, contentType, fileName));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return Result<ExportFile>.Failure(ApiError.Transport(ex.Message));
+        }
+    }
+
     public Task<Result<IReadOnlyList<string>>> GetCategoriesAsync(
         string? project, CancellationToken ct = default) =>
         GetAsync<IReadOnlyList<string>>("api/categories" + Query(("project", project)), ct);

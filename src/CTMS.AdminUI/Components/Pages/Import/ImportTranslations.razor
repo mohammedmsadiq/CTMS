@@ -14,7 +14,7 @@
 </nav>
 
 <PageHeader Title="Import translations"
-           Lead="Bulk-load values for one language from a JSON or flat key=value file. Preview first — nothing is written until you press Import." />
+           Lead="Bulk-load values from a JSON, flat key=value, CSV or Excel file. A wide CSV/Excel file (one column per language) updates every language at once; narrow files need a language. Preview first — nothing is written until you press Import." />
 
 @if (_metaError is not null)
 {
@@ -27,7 +27,7 @@ else
             <div class="row g-3">
                 <div class="col-sm-6 col-md-3">
                     <label class="form-label" for="imp-format">Format</label>
-                    <select id="imp-format" class="form-select" @bind="_format">
+                    <select id="imp-format" class="form-select" @bind="_format" @bind:after="OnFormatChanged">
                         @foreach (var (value, label) in ImportFormats.All)
                         {
                             <option value="@value">@label</option>
@@ -35,14 +35,18 @@ else
                     </select>
                 </div>
                 <div class="col-sm-6 col-md-3">
-                    <label class="form-label" for="imp-lang">Language</label>
+                    <label class="form-label" for="imp-lang">Language <span class="text-muted">(optional)</span></label>
                     <select id="imp-lang" class="form-select" @bind="_language">
-                        <option value="">Choose…</option>
+                        <option value="">Leave empty for a wide file</option>
                         @foreach (var lang in _languages)
                         {
                             <option value="@lang">@lang</option>
                         }
                     </select>
+                    <div class="form-text">
+                        Leave empty for a wide CSV/Excel file (one column per language).
+                        Required for JSON, flat, and narrow <code>key,value</code> files.
+                    </div>
                 </div>
                 <div class="col-sm-6 col-md-3">
                     <label class="form-label" for="imp-status">Initial status</label>
@@ -58,20 +62,26 @@ else
                 </div>
 
                 <div class="col-12">
-                    <label class="form-label" for="imp-file">Upload a file <span class="text-muted">(or paste below)</span></label>
+                    <label class="form-label" for="imp-file">
+                        @(IsXlsx ? "Upload the .xlsx file" : "Upload a file")
+                        <span class="text-muted">@(IsXlsx ? "(required)" : "(or paste below)")</span>
+                    </label>
                     <InputFile id="imp-file" class="form-control" OnChange="OnFileChangedAsync" />
                     @if (_fileNote is not null)
                     {
                         <div class="form-text">@_fileNote</div>
                     }
                 </div>
-                <div class="col-12">
-                    <label class="form-label" for="imp-content">Content</label>
-                    <textarea id="imp-content" class="form-control font-monospace" rows="12"
-                              spellcheck="false" @bind="_content" @bind:event="oninput"
-                              placeholder="Paste the file body here…"></textarea>
-                    <div class="form-text">@ContentSizeNote</div>
-                </div>
+                @if (!IsXlsx)
+                {
+                    <div class="col-12">
+                        <label class="form-label" for="imp-content">Content</label>
+                        <textarea id="imp-content" class="form-control font-monospace" rows="12"
+                                  spellcheck="false" @bind="_content" @bind:event="oninput"
+                                  placeholder="Paste the file body here…"></textarea>
+                        <div class="form-text">@ContentSizeNote</div>
+                    </div>
+                }
             </div>
 
             <ErrorAlert Error="_error" />
@@ -160,7 +170,8 @@ else
 
         @if (!_lastWasDryRun)
         {
-            <a class="btn btn-outline-secondary" href="@($"projects/{Code}/grid")">Open the grid</a>
+            <p class="text-muted">The import is applied. Review the results in the grid.</p>
+            <a class="btn btn-primary" href="@($"projects/{Code}/grid")">Open the grid</a>
         }
     }
 }
@@ -175,6 +186,7 @@ else
     private string _status = ReviewStates.Draft;
     private string _category = "";
     private string _content = "";
+    private string? _contentBase64;
     private string? _fileNote;
 
     private bool _busy;
@@ -187,8 +199,13 @@ else
     private IReadOnlyList<string> _languages = Array.Empty<string>();
     private string? _loadedCode;
 
+    private bool IsXlsx => string.Equals(_format, "xlsx", StringComparison.Ordinal);
+
+    // Content lives in the textarea for the text formats and in the base64 buffer for xlsx.
+    // Language is deliberately not required here — the server decides (narrow needs it, a
+    // detected-wide CSV/Excel ignores it) and surfaces a 400 with the reason.
     private bool CanSubmit =>
-        !string.IsNullOrWhiteSpace(_language) && !string.IsNullOrWhiteSpace(_content);
+        IsXlsx ? !string.IsNullOrEmpty(_contentBase64) : !string.IsNullOrWhiteSpace(_content);
 
     private string ContentSizeNote
     {
@@ -212,6 +229,7 @@ else
         _plan = null;
         _error = null;
         _content = "";
+        _contentBase64 = null;
         _fileNote = null;
         await LoadMetaAsync();
     }
@@ -222,11 +240,9 @@ else
         var app = await Api.GetProjectAsync(Code);
         if (app.IsSuccess)
         {
+            // Language stays empty by default so a wide file "just works"; the user picks a
+            // language only for a narrow import.
             _languages = app.Value!.EnabledLanguageCodes;
-            if (string.IsNullOrEmpty(_language) && _languages.Count > 0)
-            {
-                _language = app.Value.BaseLanguageCode;
-            }
         }
         else
         {
@@ -234,10 +250,26 @@ else
         }
     }
 
+    private void OnFormatChanged()
+    {
+        _plan = null;
+        _error = null;
+        _fileNote = null;
+        if (IsXlsx)
+        {
+            _content = "";
+        }
+        else
+        {
+            _contentBase64 = null;
+        }
+    }
+
     private async Task OnFileChangedAsync(InputFileChangeEventArgs e)
     {
         _fileNote = null;
         _error = null;
+        _plan = null;
         var file = e.File;
         if (file is null)
         {
@@ -250,18 +282,32 @@ else
             return;
         }
 
+        var guessed = GuessFormat(file.Name);
+        if (guessed is not null)
+        {
+            _format = guessed;
+        }
+
         try
         {
             using var stream = file.OpenReadStream(MaxBytes);
-            using var reader = new StreamReader(stream);
-            _content = await reader.ReadToEndAsync();
-            _fileNote = $"Loaded \"{file.Name}\" ({file.Size / 1024.0:0.#} KB).";
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            var bytes = buffer.ToArray();
 
-            var guessed = GuessFormat(file.Name);
-            if (guessed is not null)
+            if (IsXlsx)
             {
-                _format = guessed;
+                // xlsx is binary — ship the bytes base64-encoded in contentBase64.
+                _contentBase64 = Convert.ToBase64String(bytes);
+                _content = "";
             }
+            else
+            {
+                _content = System.Text.Encoding.UTF8.GetString(bytes);
+                _contentBase64 = null;
+            }
+
+            _fileNote = $"Loaded \"{file.Name}\" ({file.Size / 1024.0:0.#} KB).";
         }
         catch (Exception ex)
         {
@@ -275,6 +321,8 @@ else
         return ext switch
         {
             ".json" => "json",
+            ".csv" => "csv",
+            ".xlsx" => "xlsx",
             ".properties" or ".txt" or ".env" => "flat",
             _ => null,
         };
@@ -291,12 +339,13 @@ else
         }
 
         var request = new ImportTranslationsRequest(
-            _format,
-            _language,
-            _content,
-            string.IsNullOrWhiteSpace(_category) ? null : _category.Trim(),
-            _status,
-            dryRun);
+            Format: _format,
+            Language: string.IsNullOrWhiteSpace(_language) ? null : _language,
+            Content: IsXlsx ? null : _content,
+            Category: string.IsNullOrWhiteSpace(_category) ? null : _category.Trim(),
+            Status: _status,
+            DryRun: dryRun,
+            ContentBase64: IsXlsx ? _contentBase64 : null);
 
         var result = await Api.ImportTranslationsAsync(Code, request);
         _busy = false;
@@ -308,8 +357,9 @@ else
             if (!dryRun)
             {
                 var v = result.Value!;
+                var scope = string.IsNullOrWhiteSpace(_language) ? "all languages" : _language;
                 Toasts.ShowSuccess(
-                    $"Imported {_language}: {v.CreatedKeys} keys, {v.CreatedStrings} new + {v.UpdatedStrings} updated strings" +
+                    $"Imported {scope}: {v.CreatedKeys} keys, {v.CreatedStrings} new + {v.UpdatedStrings} updated strings" +
                     (v.Skipped > 0 ? $", {v.Skipped} skipped" : "") + ".");
             }
         }

@@ -38,31 +38,71 @@ step and the checklist for the retirement step.
 
 ### Path A — the bulk import endpoint (preferred)
 
-`POST /api/projects/{project}/import` — one file per `(project, language)`:
+`POST /api/projects/{project}/import`. Supported `format`s: `json`, `flat`
+(both **narrow** — one language per request), and `csv` / `xlsx` (narrow *or*
+**wide** — many languages in one file). RESX is not supported: pre-convert a
+`.resx` to JSON by reading `<data name>` / `<value>` pairs (skip entries with a
+`type=` / `mimetype=` attribute) into `{ name: value }`.
+
+**Narrow — one `(project, language)` per file** (`json` / `flat`, or a
+`csv`/`xlsx` with a `value` column):
 
 ```json
 {
   "format": "json",
   "language": "fr-FR",
   "content": "{ \"checkout.button.submit\": \"Payer\", \"common.cancel\": \"Annuler\" }",
-  "category": null,
   "status": "InReview",
   "dryRun": true
 }
 ```
 
-- **`format` is `json` or `flat` only** (`key=value` lines). CSV and RESX are
-  **not** supported — pre-convert:
-  - `.resx` → JSON: read `<data name>`/`<value>` pairs (skip entries with a
-    `type=` / `mimetype=` attribute), emit `{ name: value }`.
-  - spreadsheet / CSV → flat: one `key=value` per row.
+**Wide — every language in one spreadsheet** (`csv` / `xlsx` with a `key` column
+plus one column per registered language code). This is the fastest bulk path when
+your legacy export already has a column per culture:
+
+1. Register the languages first (`POST /api/languages/bulk`) and enable them on
+   the project — a header only counts as a language column if the code is
+   registered, and a wide import does **not** re-check enabled-for-project.
+2. Get a template: `GET /api/projects/{project}/export?format=xlsx` against the
+   (still empty) project gives you the exact header —
+   `key,category,description,<lang>,<lang>,…` — or hand-build the CSV:
+   ```csv
+   key,category,description,en-GB,fr-FR,de-DE
+   checkout.button.submit,Checkout,Primary CTA,Pay now,Payer,Jetzt bezahlen
+   common.cancel,Common,,Cancel,Annuler,Abbrechen
+   ```
+3. Fill it, then import. `csv` goes in `content`; `xlsx` bytes go **base64-encoded
+   in `contentBase64`**. No `language` — the headers carry it:
+   ```json
+   { "format": "csv", "content": "key,category,description,en-GB,fr-FR,de-DE\n…", "status": "InReview", "dryRun": true }
+   ```
+4. A blank cell is a **skip**, never a delete — partial sheets are fine.
+
+Common to both:
+
 - **Run with `dryRun: true` first** — it returns `createdKeys` / `createdStrings`
-  / `updatedStrings` / `skipped`, a per-row `errors` list (bad key names), and up
-  to 200 key names, and writes nothing.
-- `language` must already exist **and** be enabled for the project.
-- Body-size ceiling for this route is `Limits:MaxImportBodyBytes` (default 5 MB);
-  split a larger file by language or by key prefix.
-- See [`api.md` → Bulk import](api.md#bulk-import).
+  / `updatedStrings` / `skipped`, a per-row `errors` list (bad key names; 1-based
+  row numbers, `xlsx` counted from the worksheet so the first data row is `2`),
+  and up to 200 key names, and writes nothing.
+- **`status`** is `Draft` (default) / `InReview` / `Approved`; `Published` /
+  `Archived` are rejected — publish through the review workflow after validation.
+  An existing string is walked to `status`, so import at `InReview` when you want
+  the values queued for a reviewer.
+- Body-size ceiling for this route is `Limits:MaxImportBodyBytes` (default 5 MB;
+  base64 inflates `xlsx` ~33 %); split a larger file by language or by key prefix.
+- See [`api.md` → Bulk import](api.md#bulk-import) and the full how-to in
+  [`import-export.md`](import-export.md).
+
+### Round-tripping through Excel
+
+After the first load you can keep editing in a spreadsheet:
+`GET /api/projects/{project}/export?format=xlsx` → edit cells in Excel →
+re-import the file (wide). Changed cells upsert; unchanged cells are `skipped`;
+blank cells are left alone. Because an edited string is walked to the import
+`status`, re-importing with the default (`Draft`) sends previously `InReview` /
+`Approved` / `Published` cells **back to `Draft`** — pass `status: "InReview"`
+(or `Approved`) to keep them moving through review.
 
 ### Path B — a one-off script
 

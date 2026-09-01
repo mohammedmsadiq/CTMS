@@ -6,6 +6,7 @@
 @inject IAuthorizationService Authorization
 @inject AuthenticationStateProvider AuthState
 @inject ToastService Toasts
+@inject DownloadService Downloads
 
 <PageTitle>Grid — CTMS Admin</PageTitle>
 
@@ -20,6 +21,32 @@
 <PageHeader Title="Translation grid"
            Lead="Every key across every enabled language. Add keys inline, click a cell to edit its value, and bulk-review a filtered set.">
     <Actions>
+        <div class="btn-group">
+            <button type="button" class="btn btn-outline-secondary" disabled="@_exporting"
+                    title="Download the filtered grid as CSV" @onclick='() => ExportAsync("csv")'>
+                @if (_exporting)
+                {
+                    <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                }
+                Export CSV
+            </button>
+            <div class="btn-group" role="group">
+                <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split"
+                        disabled="@_exporting" aria-haspopup="true"
+                        aria-expanded="@(_showExportMenu ? "true" : "false")"
+                        @onclick="() => _showExportMenu = !_showExportMenu">
+                    <span class="visually-hidden">More export formats</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end@(_showExportMenu ? " show" : "")" data-bs-popper="static">
+                    <li>
+                        <button type="button" class="dropdown-item" @onclick='() => ExportAsync("csv")'>Export CSV</button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item" @onclick='() => ExportAsync("xlsx")'>Export Excel</button>
+                    </li>
+                </ul>
+            </div>
+        </div>
         <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent">
             <button class="btn btn-primary" @onclick="() => _showNewKey = !_showNewKey">
                 @(_showNewKey ? "Close" : "＋ New key")
@@ -27,6 +54,12 @@
         </AuthorizeView>
     </Actions>
 </PageHeader>
+
+@if (_showExportMenu)
+{
+    <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 999;"
+         @onclick="() => _showExportMenu = false"></div>
+}
 
 @if (_showNewKey)
 {
@@ -406,6 +439,10 @@ else
     private string _bulkAction = ReviewActions.Approve;
     private string _bulkLanguage = "";
     private bool _bulkBusy;
+
+    // Export
+    private bool _exporting;
+    private bool _showExportMenu;
 
     private CancellationTokenSource? _searchDebounce;
     private string? _loadedCode;
@@ -793,6 +830,49 @@ else
         else
         {
             _rowError = result.Error;
+        }
+    }
+
+    private async Task ExportAsync(string format)
+    {
+        _showExportMenu = false;
+        _exporting = true;
+        _rowError = null;
+
+        try
+        {
+            // Carry the language only when the grid is narrowed to a single column; otherwise
+            // omit it so the server exports every enabled language.
+            var columns = Columns.ToList();
+            var language = columns.Count == 1 ? columns[0] : null;
+
+            var result = await Api.GetExportAsync(
+                Code,
+                format,
+                language,
+                string.IsNullOrWhiteSpace(_category) ? null : _category,
+                string.IsNullOrWhiteSpace(_status) ? null : _status);
+
+            if (result.IsSuccess)
+            {
+                var file = result.Value!;
+                await Downloads.SaveAsync(file.Bytes, file.FileName, file.ContentType);
+            }
+            else
+            {
+                Toasts.ShowError($"Export failed: {result.Error!.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            // A JSException's Message carries the JS stack after the first line — keep the toast
+            // to the human-readable part.
+            var reason = ex.Message.Split('\n', 2)[0].Trim();
+            Toasts.ShowError($"Export failed: {reason}");
+        }
+        finally
+        {
+            _exporting = false;
         }
     }
 

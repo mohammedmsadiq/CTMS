@@ -91,6 +91,33 @@ The `action` verb is valid but illegal from the string's current state (e.g.
 (`review-bulk`) **skips** illegal transitions instead of failing — check
 `skipped` in the response.
 
+## Excel / CSV import does nothing, or returns `400`
+
+`POST /api/projects/{project}/import` — see [`import-export.md`](import-export.md).
+
+- **`400` "language is required for this format"** — the file was read as
+  **narrow** (no column header matched a registered language code), so it needs a
+  request `language`. Either add real language-code columns (`en-GB`, `fr-FR`, …)
+  to make it **wide**, or set `language` in the request.
+- **A wide file behaves like a narrow one** — a language column only counts if
+  that code is **registered** (`GET /api/languages`); create the languages first
+  (`POST /api/languages/bulk`). An unrecognised header is ignored.
+- **Excel `400` "not a valid .xlsx (OpenXML) workbook"** — only modern `.xlsx`
+  is accepted, not legacy `.xls`. Re-save as `.xlsx`.
+- **Excel sends nothing / "no xlsx content"** — XLSX bytes go **base64-encoded
+  in `contentBase64`**, not `content`. `content` is for the text formats
+  (`json` / `flat` / `csv`).
+- **`400` "'contentBase64' is not valid base64"** — encode the raw file bytes;
+  don't wrap in a `data:` URI or add newlines the decoder rejects.
+- **Rows imported but not delivered** — a wide import does not check that a
+  language column is *enabled* for the project. Enable it
+  (`PUT /api/projects/{code}/languages/{lang}`), then publish.
+- **Nothing changed** — blank cells are skipped by design; check `skipped` and
+  `errors` in the response, and run with `dryRun: true` to see the plan.
+- **Approved/Published strings dropped back to Draft** — an edited string is
+  walked to the import `status` (default `Draft`). Pass `status: "InReview"` or
+  `"Approved"`.
+
 ## `dotnet ef` / migrations — not applicable
 
 There is **no EF Core** and no migration tool. Indexes are created by

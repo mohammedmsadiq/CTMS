@@ -291,6 +291,46 @@ ReviewBulkResult  { transitioned, skipped }
   once at the end for the languages of strings that entered or left `Published`
   (`common` fan-out applies).
 
+## Bulk export
+
+### `GET /api/projects/{project}/export`
+
+Policy: `CanRead`. Streams a translator work file (CSV or XLSX) — one row per key
+the project **owns**, one column per language. Query DTO:
+`TranslationExportQuery`. The writers live in
+`CTMS.Application/Translations/Export` (`TranslationExporter` → `ExportedFile`);
+the endpoint only streams the bytes.
+
+| Query param | Required | Meaning |
+|---|:--:|---|
+| `format` | yes | `csv` or `xlsx`; any other value (or omitted) → `400` |
+| `language` | no | one BCP-47 code — emit just that language column; omitted ⇒ one column per code in the project's `enabledLanguageCodes` |
+| `category` | no | only keys in this category (exact, case-insensitive) |
+| `status` | no | only keys with **at least one** string in this `ReviewState` (`Draft` / `InReview` / `Approved` / `Published` / `Archived`), same semantics as the grid `status` filter; any other value → `400` |
+| `includeInactiveKeys` | no | default `false`; `true` also emits inactive keys |
+
+| Outcome | Response |
+|---|---|
+| File | `200`, body = the file bytes, `Content-Disposition: attachment; filename="{project}-translations.<ext>"` |
+| Unknown / inactive project | `404` (bare) |
+| Bad / missing `format`, or bad `status` | `400` (ProblemDetails) |
+
+- **Rows** — one per `TranslationKey` the project owns, ordered by key name
+  (ordinal). A `common` project's keys are **not** merged in (export `common`
+  itself to edit shared strings).
+- **Columns** — `key`, `category`, `description`, then one per language code.
+  Each language cell is that key's **current** value in that language **in any
+  review state** (a translator work file, not the published map); blank when no
+  string exists.
+- **CSV** — `text/csv; charset=utf-8`, RFC 4180 quoting, `\r\n` line endings, a
+  leading UTF-8 BOM; `filename="{project}-translations.csv"`.
+- **XLSX** — `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
+  one worksheet `Translations`, bold + frozen header row, frozen first column,
+  auto-sized columns; `filename="{project}-translations.xlsx"`. Written with
+  ClosedXML.
+- An exported CSV/XLSX re-imports as a **wide** file. See
+  [`import-export.md`](import-export.md).
+
 ## Bulk import
 
 ### `POST /api/projects/{project}/import`
@@ -299,7 +339,8 @@ Policy: `CanManageContent`. DTOs: `ImportTranslationsRequest`,
 `ImportTranslationsResult`, `ImportError`.
 
 ```
-ImportTranslationsRequest { format, language, content, category?, status?, dryRun = false }
+ImportTranslationsRequest { format, language?, content?, contentBase64?,
+                            category?, status?, dryRun = false }
 ImportError               { line?, key?, message }
 ImportTranslationsResult  { createdKeys, createdStrings, updatedStrings, skipped,
                             errors: ImportError[], keys: string[] }   // keys <= 200 names
@@ -307,36 +348,58 @@ ImportTranslationsResult  { createdKeys, createdStrings, updatedStrings, skipped
 
 | Body | Success | Errors |
 |---|---|---|
-| `ImportTranslationsRequest` | `200` `ImportTranslationsResult` | `400` bad `format`, malformed `content` (the `detail` names the line), invalid `status`; `404` unknown project, or `language` not enabled for it |
+| `ImportTranslationsRequest` | `200` `ImportTranslationsResult` | `400` bad `format`, unparseable body (the `detail` names the line/row), invalid `status`, or a narrow file with no `language`; `404` unknown project, or (narrow) `language` not enabled for it |
 
-- **`format`** is **`json`** or **`flat`** (`TranslationFileParser.SupportedFormats`):
+- **`format`** is **`json`**, **`flat`**, **`csv`** or **`xlsx`**
+  (`TranslationFileParser.SupportedFormats`):
   | `format` | Parser |
   |---|---|
-  | `flat` | `key=value` lines; `#` comment lines and blank lines ignored; the value is trimmed |
-  | `json` | a flat `{ "key": "value" }` object, or a nested object flattened with `.` between segments; numbers / booleans stringified, `null` → `""`, arrays rejected |
-  A later duplicate key overrides an earlier one; the first occurrence fixes
-  ordering. A body that does not parse for its declared `format` is `400` whose
-  `detail` is `Line <n>: <reason>` where a line number is known. (CSV and RESX
-  are **not** supported — pre-convert to JSON or flat.)
+  | `flat` | `key=value` lines; `#` comment lines and blank lines ignored; the value is trimmed. **Narrow.** |
+  | `json` | a flat `{ "key": "value" }` object, or a nested object flattened with `.` between segments; numbers / booleans stringified, `null` → `""`, arrays rejected. **Narrow.** |
+  | `csv` | RFC 4180; body in `content`. Shape from the header row (below). |
+  | `xlsx` | first worksheet of an OpenXML workbook; bytes **base64-encoded in `contentBase64`** (not `content`); legacy `.xls` rejected. Shape from the header row (below). |
+- **Narrow vs wide** (`csv` / `xlsx` only) — decided by the header row:
+  - **narrow** — a `key` column plus a `value` column: each row is `(key, value)`
+    for the request's **`language`** (required, as for `json` / `flat`). A narrow
+    file with no `language` → `400 "language is required for this format"`.
+  - **wide** — a `key` column plus one or more columns whose header is a
+    **registered** language code (case-insensitive): each such column imports
+    that language and the request's `language` is **ignored**. Optional
+    `category` / `description` columns seed a newly-created key; other columns are
+    ignored. **A blank cell is a skip, never a delete.**
+  A header with neither a `value` column nor a language-code column → `400`.
+- **Body content** — `content` carries the text formats (`json` / `flat` /
+  `csv`); `contentBase64` carries the `xlsx` bytes. Both `language` and `content`
+  are optional on the DTO now (a wide `csv`/`xlsx` needs neither `language` nor,
+  for `xlsx`, `content`).
 - **Request-body ceiling.** This endpoint opts into
   **`Limits:MaxImportBodyBytes`** (default 5 MB) instead of the 256 KB global
   `Limits:MaxRequestBodyBytes`; an over-cap body is `413` before binding.
-- **`language`** must be a registered language that is **enabled** for the
-  project (`404` otherwise).
-- Per parsed `(key, value)`: the `TranslationKey` is **created if missing** — its
-  category is the request `category` if given, else derived from the key name;
-  `createdBy` is the caller identity. The `TranslationString` for
+  Base64 inflates the `xlsx` payload ~33 %.
+- **`language`** (narrow only) must be a registered language that is **enabled**
+  for the project (`404` otherwise). Wide language columns are matched against
+  the global catalogue only — enabled-for-project is **not** re-checked per
+  column.
+- Per parsed entry: the `TranslationKey` is **created if missing** — its category
+  is a `category` column, else the request `category`, else derived from the key
+  name; `createdBy` is the caller identity. The `TranslationString` for
   `(key, language)` is then upserted and walked to **`status`**.
 - **`status`** ∈ `Draft` (default) / `InReview` / `Approved`. `Published` and
-  `Archived` are rejected with `400`.
+  `Archived` are rejected with `400`. An existing string is walked to `status`
+  even when only its value changed — re-importing with the default knocks a
+  non-`Draft` string back to `Draft`.
 - A key name outside `[A-Za-z0-9_.-]+` is recorded in `errors` (with the raw
-  `key`) and skipped; the rest of the import proceeds. A **parse** failure fails
-  the whole request with `400` before anything is written.
+  `key`) and skipped; the rest of the import proceeds. A **parse** failure
+  (bad header, unterminated quoted field, not a valid `.xlsx`, bad base64) fails
+  the whole request with `400` before anything is written. `errors` line numbers
+  are 1-based; for `xlsx` they are the worksheet row (first data row = `2`).
 - **`dryRun: true`** computes the plan — counts, `errors`, `keys` — and writes
   nothing.
-- `skipped` counts entries whose value **and** state already matched. If any
-  imported string enters or leaves `Published`, the delivery cache for
-  `(project, language)` is invalidated once at the end.
+- `createdStrings` / `updatedStrings` count across **every** language column.
+  `skipped` counts entries whose value **and** state already matched. If any
+  imported string enters or leaves `Published`, the delivery cache for the
+  affected `(project, language)` pairs is invalidated once at the end.
+- Full how-to with worked files: [`import-export.md`](import-export.md).
 
 ## Management screens
 

@@ -278,7 +278,40 @@ RFC 7807; the import route opts into a larger ceiling), `DataProtectionSetup`
 (key ring to Redis), `LoggingSetup` (JSON console + trace ids). Rationale:
 [`adr/0003-production-hardening.md`](adr/0003-production-hardening.md).
 
-## 12. Testing
+## 12. Bulk import and export (translator work files)
+
+The translation grid (spec §34) is backed by a file round-trip so translators can
+work offline in a spreadsheet. Both ends live in `CTMS.Application/Translations`
+and are pure (no HTTP, no store) so they unit-test directly; the endpoints
+(`TranslationExportEndpoints`, `TranslationImportEndpoints`) only move bytes.
+
+- **Export** — `GET /api/projects/{project}/export` (`CanRead`).
+  `TranslationExportService` assembles a `TranslationExportData` (the project's
+  **own** keys, one column per enabled language, each cell the current value in
+  any review state); `TranslationExporter` renders it to CSV or XLSX. `common`
+  keys are exported from the `common` project itself, not merged in.
+- **Import** — `POST /api/projects/{project}/import` (`CanManageContent`).
+  `TranslationFileParser` reads `json` / `flat` / `csv` / `xlsx` into
+  `ParsedTranslationEntry` rows; `TranslationImportService` creates missing keys
+  and upserts a `TranslationString` per entry, walked to the requested
+  `ReviewState`, with an `AuditEntry` per change and a single delivery-cache
+  invalidation at the end.
+- **Wide vs narrow** — for `csv` / `xlsx` the header row decides: a `key` column
+  plus one or more **registered language-code** columns is *wide* (each column is
+  a language, the request `language` is ignored); a `key` + `value` pair is
+  *narrow* (needs the request `language`, like `json` / `flat`). A blank cell is
+  a skip, never a delete.
+- **`Rfc4180`** (`CTMS.Application/Translations/Rfc4180.cs`) — a dependency-free
+  CSV reader/writer (RFC 4180 quoting, CRLF, BOM-tolerant) shared by the CSV
+  export writer and the CSV parser.
+- **ClosedXML** does the XLSX read/write; XLSX bytes cross the API base64-encoded
+  in `contentBase64`. XLSX-specific behaviour is confined to
+  `TranslationExporter` / `TranslationFileParser`.
+
+Full reference: [`import-export.md`](import-export.md),
+[`api.md` → Bulk export / Bulk import](api.md#bulk-export).
+
+## 13. Testing
 
 Three xUnit projects, ~287 cases. Application services run end-to-end against a
 real in-process MongoDB (`EphemeralMongo`); the HTTP suite runs the real
@@ -289,7 +322,7 @@ and call `ITranslationService` with no HTTP. See
 [`../CLAUDE.md`](../CLAUDE.md) and
 [`existing-solution-assessment.md`](existing-solution-assessment.md).
 
-## 13. Architecture decision records
+## 14. Architecture decision records
 
 [`adr/`](adr/) — Nygard format. `0001` (record ADRs) and `0002` (MongoDB) stand.
 `0003`–`0005` are partly superseded by this document — see

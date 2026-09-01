@@ -99,8 +99,8 @@ Two surfaces on one host (`src/CTMS.Api/Endpoints/*`):
 - **Consumer API** — `GET /api/translations/{project}/{language}` only. Anonymous
   by default (`Auth:PublicBundleReads=true`). ETag-aware, cache-fronted.
 - **Management API** — projects, languages, keys, strings, review, review-bulk,
-  publish + preview, import, grid, categories, dashboard, missing, history. Each
-  route carries a named authorization policy.
+  publish + preview, export, import, grid, categories, dashboard, missing,
+  history. Each route carries a named authorization policy.
 
 Errors become RFC 7807 `application/problem+json` through
 `ApplicationExceptionHandler`. Full reference: [`api.md`](api.md).
@@ -186,7 +186,9 @@ Not managed centrally (`ManagePackageVersionsCentrally=false`). Notable runtime
 packages: `MongoDB.Driver`, `StackExchange.Redis` +
 `Microsoft.Extensions.Caching.StackExchangeRedis`, `Microsoft.Identity.Web`,
 `Microsoft.AspNetCore.Authentication.JwtBearer`, `Swashbuckle.AspNetCore`,
-`Microsoft.AspNetCore.DataProtection.StackExchangeRedis`. Test-only:
+`Microsoft.AspNetCore.DataProtection.StackExchangeRedis`,
+`ClosedXML 0.105.1` (MIT — XLSX read/write for translation import/export, in
+`CTMS.Application`). Test-only:
 `EphemeralMongo`, `Testcontainers.MongoDb`, `xunit`,
 `coverlet.collector`, `Microsoft.AspNetCore.Mvc.Testing`.
 
@@ -199,7 +201,7 @@ current spec excludes. **Recorded here so the removal is not re-litigated:**
 |---|---|---|
 | **API-key auth** (`X-Api-Key`, `ApiKey` aggregate, `apiKeys` collection, `POST/GET/DELETE /api/api-keys`) | A read-only credential for machine callers, composed with the JWT scheme. | The current spec has exactly two consumption paths — in-process `ITranslationService` and the anonymous-by-default REST read. A second credential type is surface the spec does not call for. |
 | **Publish webhooks** (`Webhook` aggregate, `webhooks` collection, `/api/webhooks`, `X-CTMS-Signature`, the dispatch `BackgroundService`) | Push notification of a publish to registered URLs. | The spec's change-detection contract is ETag + `If-None-Match` + `304`. Webhooks were best-effort extra surface; consumers still had to fall back to conditional GET. |
-| **CSV and RESX import parsers** | Two of four `TranslationFileParser` formats. | The spec's import path is "JSON + flat". `TranslationFileParser.SupportedFormats` is now `["json", "flat"]`. Migration from `.resx` / spreadsheets is a one-off script or a pre-conversion to JSON — see [`migration.md`](migration.md). |
+| **RESX import parser** | One of the original `TranslationFileParser` formats. | `.resx` stays a pre-conversion (read `<data name>`/`<value>` into JSON). **CSV was re-added** and **XLSX added** in commit `25f911c` alongside the export writer and the translator work-file round-trip (spec §34); `TranslationFileParser.SupportedFormats` is now `["json", "flat", "csv", "xlsx"]`. See [`import-export.md`](import-export.md). |
 | **Static language catalogue** (`LanguageCatalogue`, `GET /api/languages/suggestions`, `LanguageSuggestionDto`) | A ~38-entry hard-coded BCP-47 picklist for the new-project wizard. | A hard-coded list is a code-change-per-locale. `POST /api/languages` / `POST /api/languages/bulk` accept any BCP-47 code; the Admin UI can ship its own picklist. |
 | **Versioned `TranslationBundle`** (aggregate, `translationBundles` collection, `/bundles`, `/versions`) | Immutable per-`(project, locale)` snapshots with a monotonic `Version`. | Superseded by assemble-on-demand delivery (see below). Removed before `c34515a` (ADR 0004). |
 | **`TranslationString.Version` optimistic-concurrency token** | `expectedVersion` in, `version` out, `409` + `currentVersion`. | Spec §27: no numeric versioning. String upsert is last-write-wins; mitigations are the review workflow and the audit trail. |
@@ -248,9 +250,11 @@ current spec excludes. **Recorded here so the removal is not re-litigated:**
   many audit entries across collections non-transactionally; it relies on
   operation ordering and idempotency. A mid-run failure leaves partial work
   (re-runnable).
-- **Importing existing data** (`.resx`, spreadsheets, CSV) needs a pre-conversion
-  to JSON or flat, or a one-off script hitting the string upsert. See
-  [`migration.md`](migration.md). Do not auto-delete the source data.
+- **Importing existing data** — `json` / `flat` / `csv` / `xlsx` are accepted
+  (CSV/XLSX narrow or wide-multi-language); `.resx` still needs a pre-conversion
+  to JSON, and a store the endpoint cannot express wants a one-off script hitting
+  the string upsert. See [`migration.md`](migration.md) and
+  [`import-export.md`](import-export.md). Do not auto-delete the source data.
 - **Cosmos DB for MongoDB (RU)** semantics differ from a real `mongod`
   (`retrywrites=false` required, some aggregation limits). The deploy Bicep
   defaults to the RU serverless account.

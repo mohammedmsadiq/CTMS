@@ -98,6 +98,13 @@ workflow (a non-`Draft` edit drops back to `InReview`) and the audit trail.
 When an edit knocks a **`Published`** string back to `InReview`, the delivery
 cache for that `(project, language)` is invalidated ([`caching.md`](caching.md)).
 
+**Bulk import is different.** `POST /api/projects/{project}/import`
+([`import-export.md`](import-export.md)) edits the value and then **walks the
+string to the request's `status`** (default `Draft`, or `InReview` / `Approved`).
+So a round-trip import with the default `status` sends previously `InReview` /
+`Approved` / `Published` cells to `Draft`, not `InReview`. `Published` and
+`Archived` cannot be set by import.
+
 ## Coverage / "missing"
 
 For the dashboard and the missing-translations screen, a key counts as

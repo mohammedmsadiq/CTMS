@@ -19,6 +19,10 @@ Both run the same Application logic and return the same result. MongoDB is the
 source of truth; Redis is a cache. Ships with a Blazor admin site
 (`CTMS.AdminUI`) and an optional client library (`CTMS.Client`).
 
+Translators can work offline: export a project to CSV or Excel, edit the cells,
+and re-import — a multi-language sheet round-trips in one file. See
+[`docs/import-export.md`](docs/import-export.md).
+
 ## Run it locally
 
 ```bash

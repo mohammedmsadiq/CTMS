@@ -68,9 +68,13 @@ rationale, with these corrections:
 - **Optional `category` with prefix derivation** on key create
   (`CategorySuggestion.FromKeyName`). Unchanged.
 - **`POST /api/languages/bulk`** — idempotent bulk language register. Unchanged.
-- **`POST /api/projects/{project}/import`** — bulk file import, now **`json` /
-  `flat` only** (the `csv` and `resx` parsers from 0005 are removed).
-  ([`../api.md` → Bulk import](../api.md#bulk-import))
+- **`POST /api/projects/{project}/import`** — bulk file import. The `resx` parser
+  from 0005 stays removed; `csv` was reinstated and `xlsx` added in `25f911c`
+  alongside `GET /api/projects/{project}/export` and the translator work-file
+  round-trip (spec §34). Formats are now `json` / `flat` / `csv` / `xlsx`, the
+  table formats narrow *or* wide-multi-language.
+  ([`../api.md` → Bulk import](../api.md#bulk-import),
+  [`../import-export.md`](../import-export.md))
 - **`POST /api/projects/{project}/review-bulk`** and
   **`GET /api/translations/publish/preview`**. Unchanged.
 

@@ -69,6 +69,7 @@ builder.Services.AddScoped<CtmsApiClient>(sp =>
 
 builder.Services.AddScoped<CurrentUser>();
 builder.Services.AddScoped<ToastService>();
+builder.Services.AddScoped<DownloadService>();
 
 var app = builder.Build();
 

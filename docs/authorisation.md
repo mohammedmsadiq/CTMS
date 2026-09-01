@@ -71,6 +71,7 @@ and `AuthorizationMatrixTests` (integration suite).
 | `GET /api/projects/{project}/keys…`, `…/strings…` (all GETs) | `CanRead` |
 | `GET /api/translations` (grid), `…/publish/preview`, `…/missing`, `GET /api/categories`, `GET /api/dashboard` | `CanRead` |
 | `GET /api/projects/{project}/history`, `…/strings/{language}/history` | `CanRead` |
+| `GET /api/projects/{project}/export` (CSV / XLSX work file) | `CanRead` |
 | `PUT /api/projects/{project}/keys/{keyId}/strings/{language}` (upsert) | `CanEditStrings` |
 | `POST /api/projects/{project}/keys/{keyId}/strings/{language}/review` | `CanReview` |
 | `POST /api/projects/{project}/review-bulk` | `CanReview` |

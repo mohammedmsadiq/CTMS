@@ -230,15 +230,21 @@ public sealed record BulkLanguagesResult(
 
 /// <summary>
 /// Body for <c>POST /api/projects/{project}/import</c>. <paramref name="Format"/> is one of
-/// <c>json</c> / <c>flat</c>. <paramref name="DryRun"/> plans only.
+/// <c>json</c> / <c>flat</c> / <c>csv</c> / <c>xlsx</c>. Text formats (<c>json</c>, <c>flat</c>,
+/// <c>csv</c>) carry their body in <paramref name="Content"/>; <c>xlsx</c> carries the file
+/// bytes base64-encoded in <paramref name="ContentBase64"/>. <paramref name="Language"/> is
+/// required for narrow files (and ignored for a detected-wide <c>csv</c>/<c>xlsx</c>) — the
+/// server answers <c>400 "language is required for this format"</c> when it is missing.
+/// <paramref name="DryRun"/> plans only.
 /// </summary>
 public sealed record ImportTranslationsRequest(
     string Format,
-    string Language,
-    string Content,
+    string? Language = null,
+    string? Content = null,
     string? Category = null,
     string? Status = null,
-    bool DryRun = false);
+    bool DryRun = false,
+    string? ContentBase64 = null);
 
 public sealed record ImportErrorDto(int? Line, string? Key, string Message);
 
@@ -250,12 +256,22 @@ public sealed record ImportTranslationsResult(
     IReadOnlyList<ImportErrorDto> Errors,
     IReadOnlyList<string> Keys);
 
+/// <summary>
+/// An exported translator work file: the raw bytes plus the metadata the browser needs to
+/// save it. Produced by <see cref="CTMS.AdminUI.Services.CtmsApiClient.GetExportAsync"/> and
+/// streamed to the browser over the Blazor circuit, so the download never leaves the Admin UI
+/// origin (no CORS entry, no client-side token).
+/// </summary>
+public sealed record ExportFile(byte[] Bytes, string ContentType, string FileName);
+
 public static class ImportFormats
 {
     public static readonly IReadOnlyList<(string Value, string Label)> All = new[]
     {
-        ("json", "JSON (nested)"),
+        ("json", "JSON"),
         ("flat", "Flat key=value"),
+        ("csv", "CSV"),
+        ("xlsx", "Excel (.xlsx)"),
     };
 }
 
