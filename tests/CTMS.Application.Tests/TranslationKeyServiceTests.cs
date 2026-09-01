@@ -1,6 +1,8 @@
 using CTMS.Application.Common;
 using CTMS.Application.Tests.Infrastructure;
 using CTMS.Application.Translations;
+using CTMS.Domain.Translations;
+using CTMS.Infrastructure.Persistence.Caching;
 
 namespace CTMS.Application.Tests;
 
@@ -132,6 +134,47 @@ public sealed class TranslationKeyServiceTests : IDisposable
     public async Task DeleteAsync_returns_null_for_an_unknown_application()
     {
         Assert.Null(await Service.DeleteAsync("nope", Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_invalidates_the_delivery_cache_and_audits_when_a_published_string_is_removed()
+    {
+        await Seed.LanguageAsync(_harness, "en-GB");
+        var project = await Seed.ApplicationAsync(_harness, "shop", "en-GB", enabledLanguages: ["en-GB"]);
+        var key = await Seed.KeyAsync(_harness, project.Id, "checkout.pay", "Checkout");
+        await Seed.StringAsync(_harness, key.Id, "en-GB", "Pay now", ReviewState.Published);
+
+        // Prime the delivery cache for shop/en-GB.
+        await _harness.PublishedTranslationsService.GetPublishedAsync("shop", "en-GB");
+        Assert.NotNull(await _harness.DistributedCache.GetAsync(
+            PublishedTranslationsCache.KeyFor("shop", "en-GB")));
+
+        Assert.True(await Service.DeleteAsync("shop", key.Id, actor: "carol"));
+
+        // Cache entry dropped so the next fetch re-assembles without the deleted key.
+        Assert.Null(await _harness.DistributedCache.GetAsync(
+            PublishedTranslationsCache.KeyFor("shop", "en-GB")));
+
+        var audit = await _harness.Audit.ListByEntityAsync("TranslationKey", key.Id);
+        Assert.Contains(audit, e => e.Action == Domain.Audit.AuditAction.Deleted && e.Actor == "carol");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_deactivating_a_key_invalidates_the_delivery_cache()
+    {
+        await Seed.LanguageAsync(_harness, "en-GB");
+        var project = await Seed.ApplicationAsync(_harness, "portal", "en-GB", enabledLanguages: ["en-GB"]);
+        var key = await Seed.KeyAsync(_harness, project.Id, "nav.home", "Navigation");
+        await Seed.StringAsync(_harness, key.Id, "en-GB", "Home", ReviewState.Published);
+
+        await _harness.PublishedTranslationsService.GetPublishedAsync("portal", "en-GB");
+        Assert.NotNull(await _harness.DistributedCache.GetAsync(
+            PublishedTranslationsCache.KeyFor("portal", "en-GB")));
+
+        await Service.UpdateAsync("portal", key.Id, new UpdateTranslationKeyRequest(Active: false), actor: "dave");
+
+        Assert.Null(await _harness.DistributedCache.GetAsync(
+            PublishedTranslationsCache.KeyFor("portal", "en-GB")));
     }
 
     public void Dispose() => _harness.Dispose();

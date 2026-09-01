@@ -49,7 +49,8 @@ public sealed class CtmsTestHarness : IDisposable
 
         ProjectService = new ProjectService(Projects, Languages, UnitOfWork);
         LanguageService = new LanguageService(Languages, UnitOfWork);
-        TranslationKeyService = new TranslationKeyService(Keys, Projects, UnitOfWork);
+        TranslationKeyService = new TranslationKeyService(
+            Keys, Strings, Projects, Audit, invalidator, UnitOfWork);
         TranslationStringService = new TranslationStringService(
             Strings, Keys, Languages, Projects, Audit, invalidator, UnitOfWork);
         PublishedTranslationsService = new PublishedTranslationsService(

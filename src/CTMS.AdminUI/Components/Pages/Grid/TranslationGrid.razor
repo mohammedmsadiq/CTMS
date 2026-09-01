@@ -294,12 +294,21 @@ else
                             </td>
                         }
                         <td class="act-col text-nowrap">
-                            <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
-                                <button class="btn btn-sm btn-outline-secondary" title="Edit key metadata"
-                                        @onclick="() => BeginEditMeta(row)">Edit</button>
-                                <button class="btn btn-sm btn-outline-danger" title="Delete key"
-                                        @onclick="() => _pendingDelete = row">Delete</button>
-                            </AuthorizeView>
+                            @if (row.IsBorrowed)
+                            {
+                                <span class="text-muted small">Common &mdash;
+                                    <a href="@($"projects/{row.BorrowedFrom}/grid?search={Uri.EscapeDataString(row.Key)}")">manage there</a>
+                                </span>
+                            }
+                            else
+                            {
+                                <AuthorizeView Policy="@AuthorizationPolicies.CanManageContent" Context="mutate">
+                                    <button class="btn btn-sm btn-outline-secondary" title="Edit key metadata"
+                                            @onclick="() => BeginEditMeta(row)">Edit</button>
+                                    <button class="btn btn-sm btn-outline-danger" title="Delete key"
+                                            @onclick="() => _pendingDelete = row">Delete</button>
+                                </AuthorizeView>
+                            }
                         </td>
                     </tr>
                     @if (_editingMetaKeyId == row.KeyId)
@@ -512,7 +521,8 @@ else
             {
                 _rows.Add(new GridRow(
                     r.KeyId, r.Key, r.Category, r.Description,
-                    r.Values.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase)));
+                    r.Values.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase),
+                    r.Source));
             }
 
             if (_skip > 0 && _rows.Count == 0 && _total > 0)
@@ -790,12 +800,19 @@ else
 
     private sealed class GridRow(
         Guid keyId, string key, string category, string? description,
-        Dictionary<string, TranslationValueDto> values)
+        Dictionary<string, TranslationValueDto> values, string? source)
     {
         public Guid KeyId { get; } = keyId;
         public string Key { get; } = key;
         public string Category { get; set; } = category;
         public string? Description { get; set; } = description;
         public Dictionary<string, TranslationValueDto> Values { get; } = values;
+
+        /// <summary>The Common project code when this key is merged in from a common project, else null.</summary>
+        public string? BorrowedFrom { get; } =
+            source is { } s && s.StartsWith("shared:", StringComparison.Ordinal) ? s["shared:".Length..] : null;
+
+        /// <summary>The key belongs to a common project — its metadata and values are read-only here.</summary>
+        public bool IsBorrowed => BorrowedFrom is not null;
     }
 }

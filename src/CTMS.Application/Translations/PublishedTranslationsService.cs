@@ -290,7 +290,8 @@ public sealed class PublishedTranslationsService
                     }
                 }
 
-                return new TranslationRowDto(t.Key.Id, t.Key.KeyName, t.Key.Category, t.Key.Description, values);
+                return new TranslationRowDto(
+                    t.Key.Id, t.Key.KeyName, t.Key.Category, t.Key.Description, values, t.Source);
             })
             .ToList();
 

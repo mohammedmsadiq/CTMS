@@ -24,13 +24,19 @@ public sealed record PublishedTranslationsResponse(
 /// </summary>
 public sealed record TranslationValueDto(string Value, string Status, string Source);
 
-/// <summary>One management grid row — a key and its value per enabled language.</summary>
+/// <summary>
+/// One management grid row — a key and its value per enabled language. <see cref="Source"/> is
+/// <c>app</c> when the key belongs to the queried project, or <c>shared:&lt;code&gt;</c> when it is
+/// merged in from a common project (its key/values are read-only in this grid and managed in the
+/// owning project).
+/// </summary>
 public sealed record TranslationRowDto(
     Guid KeyId,
     string Key,
     string Category,
     string? Description,
-    IReadOnlyDictionary<string, TranslationValueDto> Values);
+    IReadOnlyDictionary<string, TranslationValueDto> Values,
+    string Source);
 
 /// <summary>Per-language coverage for the dashboard.</summary>
 public sealed record LanguageCoverageDto(
